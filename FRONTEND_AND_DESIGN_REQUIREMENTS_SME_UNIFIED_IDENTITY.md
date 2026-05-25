@@ -245,9 +245,5 @@ This is aggressive but parallelisable. Slips on any one track don't block the ot
 
 ---
 
-## 9. Questions for Yerins to answer before sharing with the teams
 
-1. Sign-off on the model (Instagram-style product switching under one identity).
-2. Answers to the open questions in §5 — especially "is SME mobile in MVP?" because it determines mobile FE scope.
-3. Who owns each track (which person on FE, which designer)?
-4. Should the SME web UI live inside `riverly-cooperate-banking` or as a separate Next.js app at the same domain? Recommendation: same app, new route prefix, max component reuse.
+
