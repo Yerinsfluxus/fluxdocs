@@ -1,218 +1,247 @@
-# Frontend & Design Requirements — SME Product + Unified Identity
+# SME Mobile App — Design & Frontend Requirements
 
-**Status:** Draft for design + FE review
-**Companion to:** [UNIFIED_IDENTITY_AND_SME_PRODUCT_DESIGN.md](./UNIFIED_IDENTITY_AND_SME_PRODUCT_DESIGN.md) (backend design)
-**Audience:** Design team, mobile FE, corporate web FE
-**Updated:** 2026-05-26
+**Scope:** The new SME mobile app (separate APK / store listing) for sole-proprietor businesses with a CAC business-name registration. Account creation, KYB, transfers (inter and intra), minimal account management. Core banking via Anchor.
 
----
-
-## TL;DR for everyone
-
-We're adding a third product (**SME** — for sole-proprietors with a business-name CAC registration) and at the same time refactoring how people sign in so that **one email/phone can hold all three products** (Personal, SME, Corporate) under one identity — like switching between personal and business accounts on Instagram.
-
-To make this real, design needs to produce a handful of new flows, and both frontend apps (mobile + corporate web) need to adopt a slightly different login pattern, plus build out SME screens.
-
-This document is the punch-list of everything design and FE need to do, organised by team.
+This document is in two sections — what the design team produces in Figma, and what the frontend team builds against those designs.
 
 ---
 
-## 1. The mental model designers/FE need to internalise first
+## For the design team (Figma)
 
-Today: **login = open the product directly**. Phone+passcode opens the Personal app, email+password opens the Corporate web. The product is the same thing as the account.
+The SME app is its own product surface but shares an identity with Riverly's Personal and Corporate products. The screens below are everything the SME app itself needs. A user who also has a Personal account or a Corporate workspace will be able to jump into those other Riverly apps from the SME app via a switcher — the switcher just *links out* to the Personal app or the Corporate web; it doesn't render their UI inside SME.
 
-After this change: **login → identity → pick a product**.
+### Authentication & onboarding flow
 
-1. User logs in with their email or phone + password.
-2. Backend returns the identity *and* the list of products this person already belongs to (Personal? SME? Corporate? Some combination?).
-3. User picks one and lands in that product's UI (or auto-lands if they only have one).
-4. Inside any product, there's an always-available "switch product" affordance — same identity, different context.
-5. Anywhere in the UI, "Add Personal/SME/Corporate" is offered — the user fills in only the *extra* KYC that product needs (because the identity-level details are already on file).
+**A1 — Sign up (new identity)**
+Single screen capturing full name, email, phone number, password. Sends an OTP to the phone (and email if provided) for verification. After OTP verify, lands the user in the business-info step (A2). This creates a fresh Riverly identity AND immediately enrolls them in the SME product — there's no "pick a product" gate, because they're already in the SME app.
 
-This is the only structural change. Every existing screen inside Personal or Corporate works the same way once the user is in that product context — just with one extra chrome element (the switcher) at the top.
+**A2 — Business basics**
+Collects: business name (as registered with CAC), RC number (the CAC number for business names), industry (dropdown), business address. One screen, four fields. Save → next.
 
----
+**A3 — KYB document upload**
+Two required, two recommended documents (see KYB section below for rationale on which to include):
+- CAC certificate (file upload — PDF or image)
+- CAC status report (file upload)
+- Proprietor's government ID — NIN slip / driver's license / passport (file upload)
+- Proprietor's BVN (text input — 11 digits)
 
-## 2. For DESIGNERS
+Followed by an in-app selfie capture for liveness/face-match against the ID.
 
-### 2.1 New flows to design end-to-end
+Each item is its own step or stacked on one scrollable screen — designer's call. Each accepts retry / re-upload until "Submit for review".
 
-| # | Flow | Why | Notes |
-|---|---|---|---|
-| D1 | **Unified login** | Single entrypoint for all three products. Replaces today's separate Personal/Corporate login screens. | One input that accepts email *or* phone, plus a password field. Mobile may keep the 6-digit passcode for ergonomics — see §5 open Qs. |
-| D2 | **Product picker (post-login)** | After login, user sees the products they belong to and picks one. Skipped if they only have one. | Compact card list. Each card shows product name, role (for Corporate), and status (verified vs pending KYB). |
-| D3 | **In-app product switcher** | Always-visible affordance inside any product to switch to another. Models Instagram's account switcher. | Probably a top-bar element (avatar + dropdown) or a settings-level "switch" item. Needs a design call on chrome placement for both mobile and web. |
-| D4 | **"Add Personal / SME / Corporate to your account"** | An existing user adds a new product without re-registering. | Lives in account settings. Shows only the products the user doesn't yet have. Each kicks off the corresponding enrollment flow (E1, E2, E3 below). |
-| D5 | **SME onboarding (E1)** | Brand-new user signs up *as* an SME. | 3 steps: identity (name/email/phone/password/OTP) → business basics (name, RC#, industry, address) → KYB docs (CAC cert upload + status report upload). |
-| D6 | **SME enrollment for existing user (E2)** | A Personal user adds SME alongside. | Skips the identity step entirely (already done). Starts at business basics. |
-| D7 | **Corporate enrollment for existing user (E3)** | A Personal/SME user opens a Corporate workspace. | Heavier than SME — board resolution, multiple UBOs, directors' BVNs (existing corporate KYB flow). |
-| D8 | **KYB status & resubmission** | Show "Pending review" / "Verified" / "Rejected — please resubmit X". | One screen with current status, what's missing, and a re-upload affordance. |
-| D9 | **SME dashboard** | Landing screen after picking SME. | Reuse the corporate dashboard pattern (balance card, recent transactions, quick actions) but single-account flavour. |
-| D10 | **SME transfer flows** | Inter-Riverly + outbound bank transfer. | Visually similar to Personal app's transfer flow. Reuse components where possible. |
-| D11 | **Identity / "your account" settings** | Manage the *identity-level* things: email, phone, password, MFA, transaction PIN, devices. | Surfaced inside any product context. Changes here affect all three products. |
-| D12 | **Empty / first-run states for SME** | "You haven't enrolled in SME yet — get started" CTA inside settings or on the product picker. | |
+**A4 — KYB pending review**
+After submission, user lands on a status screen. Shows: "We're reviewing your business — usually within X hours." Lists what was submitted. Has a "Contact support" affordance.
 
-### 2.2 Visual / branding decisions design needs to make
+**A5 — KYB approved / account ready**
+When backend flips KYB to approved, the user is bumped into the home dashboard (A8). Push notification at the same time.
 
-These are calls only design can make. List them so they can be tracked:
+**A6 — KYB rejected / needs more info**
+Shows which document was rejected and why (free-text from the admin reviewer). Re-upload affordance for that specific item, plus a Submit button.
 
-1. **One brand or three?** Do Personal/SME/Corporate look like one product with different modes, or three sibling products under the Riverly umbrella? Lean toward "one product, three modes" — easier for users, less work to design, matches the Instagram model.
-2. **Visual signal for "which product am I in?"** A coloured top-bar accent? A label next to the logo? An icon? Users must never be confused which context they're transacting in — this matters enormously for trust and for preventing wrong-account transfers.
-3. **Switcher chrome.** Where it lives on mobile vs web. Most intuitive pattern is top-right account avatar → dropdown listing products → click to switch.
-4. **Empty/pending states.** What does an SME with no balance, no transactions, no KYB done yet look like? What's the most encouraging next step?
-5. **Cross-product notifications.** If a user is in Personal and a transaction comes in on their SME account, how is that surfaced? Badge on the switcher? Toast that says "View in SME"?
-6. **Logout vs "switch user".** With unified identity, "logout" logs out the whole human. There's no separate per-product logout. Design needs to make sure copy reflects this and nobody thinks they're still logged into Corporate after logging out of Personal.
+**A7 — Sign in (existing identity)**
+For users who already have a Riverly identity (e.g., they signed up on the Personal app first). One screen: email/phone + password, then OTP if device is unrecognised. If they don't yet have SME enrolled on this identity, route them through A2 → A3 → A4. If they already have SME and it's approved, go to A8. If approved but no transaction PIN set yet, go to T1.
 
-### 2.3 Deliverables we need from design (in priority order)
+### Home & navigation
 
-To unblock frontend, design should ship in this order:
+**A8 — SME dashboard (home)**
+Single business account view. Top: account balance (large), available vs ledger balance, account number with copy button. Below: a recent-transactions list (last 5–10), and quick action buttons — Send Money, Receive (shows account number / share sheet), View Transactions, Manage Account. Top-right: profile / switcher entry (see SW1).
 
-1. Unified login + product picker (D1, D2) — blocks all FE work
-2. SME onboarding screens (D5, D6, D7) — blocks SME launch
-3. KYB status screen (D8) — blocks SME launch
-4. SME dashboard + transfer flows (D9, D10) — blocks SME launch
-5. In-app switcher chrome (D3) — needed for first SME user who also has Personal
-6. Add-a-product settings (D4) — needed for first existing user who upgrades
-7. Identity settings (D11) — can come later; existing per-product settings keep working in the interim
+**A9 — Bottom navigation**
+Four tabs: Home, Transactions, Profile, More. (Designer can decide on exact labels — "Wallet" might fit better than "Home", etc.)
 
----
+### Transfer flows
 
-## 3. For MOBILE FRONTEND (Personal app + future SME on mobile)
+**T1 — Transaction PIN setup (first-time, before any transfer)**
+4-digit PIN, then confirm. Same rules as personal app — no sequential (1234), no repeating (1111). Mandatory before first transfer; can be deferred until then.
 
-### 3.1 What changes for existing Personal app users
+**T2 — Send money (entry)**
+Two options: "To another Riverly account" (intra) or "To another bank" (inter). Designer's call on whether this is a sheet, two cards, or a tab.
 
-Bare minimum to keep working with the new backend:
+**T3 — Intra-bank transfer**
+Recipient input by Riverly account number. After entry, screen shows the resolved account holder name. Then amount input, narration (optional), and a "Continue" button to T6 (review).
 
-- **Update login call.** Today: `POST /api/v1/auth/login` returns a product JWT directly. After backend phase 2: that endpoint will keep working (no break), but we want the app to migrate to the new `POST /api/v1/identity/login` which returns `{ identityToken, availableProducts, defaultProduct }`. If only one product is available (typical for current users), the client immediately calls `POST /api/v1/identity/switch-product` to get the product JWT and proceeds as today. The user sees no difference.
-- **Token storage.** Today stores one JWT. After: store both an identity JWT (short-lived, only for `/identity/*` calls) and a product JWT (used for everything else). A small abstraction in the API client makes this transparent.
-- **Logout.** Calls a new `/identity/logout` instead of the current `/auth/logout`. Clears both tokens.
+**T4 — Inter-bank transfer**
+Bank picker (searchable list — comes from Xpress Wallet's bank list endpoint), account number input, name-enquiry happens automatically when both bank + 10-digit account number are valid, shows resolved name, then amount + narration, "Continue" to T6.
 
-That's the entire ask for existing app behaviour. No UI change required to keep working.
+**T5 — Saved beneficiaries (optional for MVP)**
+List of previously transferred-to accounts. Tap one to skip to the amount step. "Save beneficiary" checkbox on T6. Can ship in v1.1 if MVP is tight.
 
-### 3.2 New screens / features mobile needs to build (for the SME product on mobile, if applicable)
+**T6 — Review & confirm**
+Summary of all transfer details (source, destination name + bank + account, amount, fee, total, narration). Bottom: a PIN-entry field. Pressing the action button submits with the PIN.
 
-If SME is going to be reachable from the mobile app (open question in §5), the app needs:
+**T7 — Success / failure result**
+Success: green check, animated, "Transaction successful" with reference, amount, recipient. Buttons: "Download receipt", "Make another transfer", "Done".
+Failure: red, error message from backend (always plain English by the time it reaches the screen — backend already gives clean messages), "Try again" and "Contact support".
 
-- Product picker screen (post-login when ≥ 2 products) — design D2
-- Switcher in the top chrome — design D3
-- "Add SME to your account" path in settings → SME enrollment flow (D6)
-- SME dashboard (D9)
-- SME transfer flow (D10)
-- SME transaction PIN setup / verification (reuses existing PIN components, new endpoints — see §6)
+**T8 — Receipt screen / download**
+PDF preview with all the transfer details. Share / download / done.
 
-If SME is web-only for MVP, mobile only needs §3.1.
+### Transactions
 
-### 3.3 New error states mobile needs to handle
+**T9 — Transactions list**
+Reverse-chronological. Each row: counterparty, amount (with credit/debit color), date, status. Filter button opens T10. Search by reference or counterparty name.
 
-- "This identity already has a product membership but it's still pending KYB" — show pending state instead of dashboard
-- "Identity locked" (too many failed attempts) — show lockout countdown
-- "Product no longer available" (suspended) — graceful fallback, allow switch to another product
+**T10 — Transactions filter**
+Date range, type (credit/debit), status (pending/completed/failed), amount range. Apply / clear.
 
----
+**T11 — Transaction detail**
+Full record: amount, fee, total, source, destination, narration, reference, status, timestamps. "Download receipt" + "Report a problem" buttons.
 
-## 4. For CORPORATE WEB FRONTEND (current `riverly-cooperate-banking` Next.js app)
+### Profile, settings, security
 
-### 4.1 What needs to change in the existing app
+**S1 — Profile / business info**
+View business name, RC number, industry, address, proprietor name. Edit address + contact details (other fields are locked because they're tied to KYB).
 
-- **Login screen.** Currently calls `POST /api/v1/corporate/login`. Update to call `POST /api/v1/identity/login` and handle the multi-product response. If the user only has Corporate, auto-switch and continue. If multiple, show the product picker.
-- **Header / chrome.** Add the switcher (avatar dropdown listing products) — design D3.
-- **Settings page.** Add an "Add SME / Add Personal" section — design D4. Each kicks off the relevant enrollment flow.
-- **Existing corporate JWT shape changes.** Today's corporate JWT has `org_id`, `role`, `channel: "web"`. After: the new product JWT for Corporate context has the same fields plus `product: "Corporate"` and `profile_id`. Frontend's `getOrganizationId()` etc. keep working.
+**S2 — Personal info (identity-level)**
+View/edit name, email, phone. Change password. Two-factor / device management. Logout. These fields are *identity-level* — changing them changes them across the user's other Riverly products too. The screen needs a small note to that effect.
 
-### 4.2 New screens to build for SME in corporate web
+**S3 — Transaction PIN management**
+Change PIN, reset PIN (uses account password as proof). Both are existing backend endpoints.
 
-The web app is the natural home for SME because business owners are usually on a laptop. So most of the SME UI lives here:
+**S4 — Notifications preferences**
+Toggle email / push / SMS per notification category (transfers, security, marketing).
 
-- SME onboarding (E1 — full flow) and enrollment (E2 — from existing identity)
-- KYB document upload (multipart form, CAC cert + status report)
-- KYB status screen
-- SME dashboard
-- SME transfer flows (inter + external) — clone of corporate equivalents, simpler
-- SME transactions list + receipt
-- SME transaction PIN management
-- SME profile / business info editor
+**S5 — Help / support**
+FAQ links, contact support (live chat or email), report a problem with a transaction.
 
-### 4.3 Component reuse from corporate
+### Cross-product switcher
 
-Don't rebuild from scratch. The corporate web already has:
+**SW1 — Switcher (top-right of every screen)**
+Tapping the avatar / icon opens a sheet showing:
+- The current identity (name, email)
+- A list of *other Riverly products this identity has access to* — for SME users, this might show "Personal — open" and/or "Corporate — open in browser"
+- "Sign out of Riverly"
 
-- Auth shell / card components
-- File upload widgets (used in corporate KYB)
-- Bank selector + name-enquiry components
-- Transaction PIN input
-- Transfer review/confirmation modal
-- Transactions list
+Tapping "Personal — open" tries to deep-link into the installed Personal app (and offers the Play Store link if not installed). Tapping "Corporate" opens the corporate web URL with a one-time auth token so the user lands signed in.
 
-All of these should be lifted into shared components and reused for SME. The SME flow is ~70% reuse, 30% new.
+For an SME user who only has the SME product, the sheet just shows their identity and the logout button — no other products listed.
 
----
+### Empty, loading, error states
 
-## 5. Open questions for the team
+Designer should produce explicit states for:
+- Empty transactions list (first-time user, no activity)
+- KYB pending (account not yet usable for transfers — show a banner on dashboard)
+- KYB rejected (banner + CTA to fix)
+- Network error / no connection
+- Outage / system-wide issue
+- Insufficient balance on a transfer
+- Daily limit reached
 
-These need decisions from product / design / engineering before FE starts building:
+### KYB documents — what to actually require
 
-1. **Is SME accessible from the mobile app, or web-only for MVP?** Decides whether mobile FE has new screens to build or just an SDK update.
-2. **Personal login: keep phone+6-digit passcode, or unify to email+password?** Most users on a mobile app are accustomed to passcode/biometric. Most business users on a desktop expect email+password. Easiest: identity supports both — phone+passcode auths a Personal-only identity; email+password auths an identity with any product. But this means the identity model has two credential paths to maintain.
-3. **One SME profile per identity, or many?** A solo trader might own multiple side businesses. MVP is 1:1; future could allow many. Affects how the "Add SME" flow is designed (single-shot vs "add another").
-4. **Switcher chrome placement.** Top-bar avatar dropdown vs in-page picker vs settings-only? Affects whether users can hop products in one click or have to go through a menu.
-5. **Cross-product notifications.** When user is in Personal and SME gets credited, how do we surface it? Influences notification design and the switcher's "unread badge" treatment.
-6. **Do we want to design a "first-time identity" flow** separate from "first-time product" flow? Or does signup always create both at once (identity + first product membership)? Backend supports both; design call.
-7. **Brand:** Does SME get its own visual identity (different colour, logo lockup), or does it look identical to Personal/Corporate with just a label change?
+Riverly is a regulated NG fintech, so the minimum that satisfies CBN (and most Anchor-backed integrations) for a business-name account is:
 
----
-
-## 6. API contract designers + FE can rely on
-
-These are the endpoints the backend will provide (per the backend design doc). Treat as the source of truth for what FE can call:
-
-### Identity layer
-
-| Method | Path | Returns | Used by |
-|---|---|---|---|
-| POST | `/api/v1/identity/signup` | `{ identityToken }` | First-time signup, before any product enrollment |
-| POST | `/api/v1/identity/login` | `{ identityToken, availableProducts[], defaultProduct }` | Unified login screen |
-| POST | `/api/v1/identity/email/verify` | OTP verify | Email verification step |
-| POST | `/api/v1/identity/phone/verify` | OTP verify | Phone verification step |
-| POST | `/api/v1/identity/switch-product` | `{ accessToken, refreshToken }` | After product picker, or via switcher |
-| GET  | `/api/v1/identity/me` | identity + all memberships | "Your account" / settings |
-| PATCH| `/api/v1/identity/me` | updated profile | Editing email/phone/name/etc. |
-| POST | `/api/v1/identity/logout` | — | Logout |
-| POST | `/api/v1/identity/products/sme/enroll` | new SME membership | "Add SME to my account" |
-| POST | `/api/v1/identity/products/corporate/enroll` | new Corporate membership | "Add Corporate to my account" |
-| POST | `/api/v1/identity/products/personal/enroll` | new Personal membership | "Add Personal" (for users that started as Corporate) |
-
-### SME product (`/api/v1/sme/*`)
-
-| Method | Path |
-|---|---|
-| POST | `/sme/kyb/documents` (multipart upload) |
-| GET  | `/sme/profile` |
-| PATCH| `/sme/profile` |
-| GET  | `/sme/account`, `/sme/account/balance` |
-| POST | `/sme/transfers/internal` |
-| POST | `/sme/transfers/external` |
-| GET  | `/sme/transactions`, `/sme/transactions/{ref}/receipt` |
-| POST | `/sme/transaction-pin/{set,verify,change,forgot}` |
-
-### Backward-compatible (existing endpoints, will keep working)
-
-- `/api/v1/auth/login` (mobile/personal — wraps identity login internally)
-- `/api/v1/corporate/login` (corporate web — wraps identity login internally)
-- All existing `/api/v1/accounts/*`, `/api/v1/transfers/*`, `/api/v1/corporate/*` endpoints — unchanged
-
-Frontend can migrate at its own pace; nothing breaks if it doesn't migrate immediately.
-
----
-
-## 7. What we need from each party to unblock backend implementation
-
-| Team | Needs to deliver | Why |
+| Document | Required? | Why |
 |---|---|---|
-| Design | Decisions on §2.2 visual questions, then D1+D2 wireframes | Determines whether identity JWT is short-lived (forced switcher) or long-lived (passive) |
-| Mobile FE | Confirm whether SME ships on mobile in MVP | Affects backend webhook routing and mobile-specific endpoints |
-| Corporate web FE | Confirm willingness to host SME UI in the existing app | Decides whether SME is a new Next.js app or screens inside the corporate web |
-| Product | Final scope for SME MVP (the doc assumes what was specified: account, KYB, transfers, minimal mgmt) | Lock so we don't expand scope mid-build |
-| Compliance | OK on cross-product data sharing (a single identity row sees all three products' KYC) | This is the core of the model — needs an explicit OK |
+| CAC certificate (business name) | Yes | Proves the business exists |
+| CAC status report | Yes | Proves it's currently active |
+| Proprietor's BVN | Yes | Regulatory — no Nigerian bank account can be opened without a BVN linked |
+| Proprietor's government ID (NIN slip / driver's licence / passport) | Yes | Identity verification |
+| Selfie / liveness check | Yes | Fraud / impersonation defence — matches face to ID |
+| Utility bill (address proof) | No (for MVP) | Only needed if you want higher transaction limits; skip for v1 |
+
+Other Nigerian SME fintechs (Sparkle, Brass, Prospa) all require at minimum BVN + CAC + ID + selfie. Going below that is unusually permissive and would raise eyebrows during the Anchor compliance review.
 
 ---
 
+## For the frontend team
+
+The SME mobile app is a brand-new app. It signs an identity in via Riverly's unified identity endpoints, enrolls them in the SME product, and from then on operates against the `/api/v1/sme/*` endpoints. All transfer / banking work flows through Anchor on the backend; frontend just calls our endpoints.
+
+### Authentication
+
+- On launch: check for a stored product-scoped JWT (`product: "SME"`). If valid → home. If absent or expired → sign-in screen.
+- On sign-in: call `POST /api/v1/identity/login` with `{ identifier, password }`. Handle:
+  - Success with SME membership → call `POST /api/v1/identity/switch-product` with `{ productType: "SME" }` to get the product JWT. Store it.
+  - Success but no SME membership yet → push the user into the SME enrollment flow (business basics → KYB upload), which calls `POST /api/v1/identity/products/sme/enroll`.
+  - Device verification required → show OTP screen, post to `POST /api/v1/auth/login/verify-device` (existing endpoint, reused).
+  - Locked / suspended → show the relevant message and a "contact support" CTA.
+- On sign-up: call `POST /api/v1/identity/signup` with `{ fullname, email, phone, password }`. Email + phone OTP verification using existing OTP endpoints. Then route into business basics → KYB.
+- Logout: `POST /api/v1/identity/logout`, clear stored tokens, return to sign-in.
+
+### Token handling
+
+Two tokens to manage:
+- A short-lived **identity JWT** — used only to call `/api/v1/identity/*` endpoints (notably `switch-product`).
+- A longer-lived **product JWT** (SME-scoped) — sent on every other request as `Authorization: Bearer <token>`.
+
+Refresh: backend provides a refresh-token flow. On a 401 from any product endpoint, attempt refresh once before forcing re-login.
+
+### KYB upload
+
+- `POST /api/v1/identity/products/sme/enroll` accepts the business basics as JSON.
+- `POST /api/v1/sme/kyb/documents` accepts the document uploads as multipart/form-data. Frontend uploads each file as it's selected so the user doesn't lose progress mid-flow.
+- Poll `GET /api/v1/sme/profile` (or subscribe to push notifications) to detect the moment KYB status flips to `Approved` and bump the user into the dashboard.
+
+### SME endpoints to integrate
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v1/sme/profile` | Profile + KYB status |
+| PATCH | `/api/v1/sme/profile` | Edit address / contact |
+| GET | `/api/v1/sme/account` | Bank account details (account number, etc.) |
+| GET | `/api/v1/sme/account/balance` | Balance refresh |
+| POST | `/api/v1/sme/transaction-pin/set` | First-time PIN |
+| POST | `/api/v1/sme/transaction-pin/verify` | Verify PIN before a transfer |
+| POST | `/api/v1/sme/transaction-pin/change` | Change PIN |
+| POST | `/api/v1/sme/transaction-pin/forgot` | Reset using account password |
+| GET | `/api/v1/sme/banks` | Bank list (Xpress Wallet) — for inter-bank transfer recipient |
+| GET | `/api/v1/sme/beneficiaries/validate?bankCode=&accountNumber=` | Name enquiry |
+| POST | `/api/v1/sme/transfers/internal` | Intra-Riverly transfer |
+| POST | `/api/v1/sme/transfers/external` | Outbound bank transfer |
+| GET | `/api/v1/sme/transactions` | List with filters |
+| GET | `/api/v1/sme/transactions/{reference}` | Single transaction |
+| GET | `/api/v1/sme/transactions/{reference}/receipt` | Receipt PDF |
+
+### Transfer flows — sequencing
+
+A typical external transfer from the frontend's perspective:
+
+1. User picks bank + enters 10-digit account → call `GET /sme/beneficiaries/validate` → show resolved name.
+2. User enters amount + narration → call `GET /sme/account/balance` to confirm sufficient funds → if not, block and show "Insufficient balance".
+3. User taps Continue → show review screen.
+4. User enters PIN → call `POST /sme/transfers/external` with `{ bankCode, accountNumber, accountName, amount, narration, transactionPin, idempotencyKey }`.
+5. On 200 → success screen with the returned reference; offer to download receipt.
+6. On 4xx → show the backend's error message verbatim (backend is already producing clean messages — never show "Something went wrong" to the user).
+
+Intra is the same shape but uses `/sme/transfers/internal` and the recipient lookup uses an internal-lookup endpoint instead of bank+account.
+
+**Idempotency:** every transfer endpoint requires an `idempotencyKey` (UUID). Generate one when the user lands on the review screen and reuse it for any retries (so a network-blip retry doesn't cause a double-send).
+
+### Cross-product switcher implementation
+
+The switcher is *not* in-app product rendering — it deep-links to the other Riverly apps:
+- Personal: deep link to `riverly-personal://open` (or whatever the URL scheme is) with the identity JWT; fall back to the Play Store / App Store listing if not installed.
+- Corporate: open the corporate web URL with `?identityToken=<jwt>` so the corporate web app can auto-sign-in.
+
+`GET /api/v1/identity/me` returns the list of products this identity has — frontend uses that response to decide which switcher items to show.
+
+### Push notifications
+
+Wire up Firebase Cloud Messaging (or equivalent) to receive backend-triggered events:
+- KYB status change (approved / rejected)
+- Incoming transfer (account credited)
+- Outgoing transfer settled / failed
+- Security alert (new device sign-in)
+
+Tapping a notification deep-links into the relevant screen — transaction detail for transaction events, KYB status for KYB events.
+
+### Error handling pattern
+
+Every API call should treat:
+- `401` → attempt token refresh once, then force re-login
+- `403` → show "you don't have permission" generic error
+- `4xx` with a body containing `message` → display that message in a toast / inline error
+- `5xx` → "Something went wrong on our side. Please try again." with a retry button
+- Network failure → "Check your connection" with retry
+
+Backend now consistently produces clean, user-displayable messages on 4xx responses — frontend can display them directly without translation.
+
+### What the frontend does NOT need to handle
+
+These are backend-owned and don't require any frontend work:
+- KYB document review (admin tool, separate from this app)
+- BVN verification call to Dojah
+- Account creation at Anchor (happens server-side once KYB is approved)
+- Webhook from Xpress Wallet when funds land (also server-side; frontend just sees the balance update via polling or push)
+- Anti-fraud / limit checks (backend enforces; frontend just shows the error)
