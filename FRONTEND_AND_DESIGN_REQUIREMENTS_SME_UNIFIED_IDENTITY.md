@@ -8,43 +8,59 @@ This document is in two sections — what the design team produces in Figma, and
 
 ## For the design team (Figma)
 
-The SME app is its own product surface but shares an identity with Riverly's Personal and Corporate products. The screens below are everything the SME app itself needs. A user who also has a Personal account or a Corporate workspace will be able to jump into those other Riverly apps from the SME app via a switcher — the switcher just *links out* to the Personal app or the Corporate web; it doesn't render their UI inside SME.
+The SME app is its own product surface. It shares an identity (email + password) with Riverly's Personal app and Corporate web — so a single user can sign in to any of the three with the same credentials — but each app stays in its own product context at runtime. There is no in-app product switching. Inside the SME app, the user is always in SME. The only cross-product touchpoint is an informational list in Settings telling the user "you also have access to Personal / Corporate — here's a link to that app/site".
 
 ### Authentication & onboarding flow
+
+Onboarding ends at the dashboard, not at KYB. The user signs up, gives the business basics, and lands on the home screen — KYB upload is something they do from there, on their own pace.
 
 **A1 — Sign up (new identity)**
 Single screen capturing full name, email, phone number, password. Sends an OTP to the phone (and email if provided) for verification. After OTP verify, lands the user in the business-info step (A2). This creates a fresh Riverly identity AND immediately enrolls them in the SME product — there's no "pick a product" gate, because they're already in the SME app.
 
 **A2 — Business basics**
-Collects: business name (as registered with CAC), RC number (the CAC number for business names), industry (dropdown), business address. One screen, four fields. Save → next.
+Collects: business name (as registered with CAC), RC number (the CAC number for business names), industry (dropdown), business address. One screen, four fields. Save → goes to the dashboard (A8). No KYB upload prompt here.
+
+**A7 — Sign in (existing identity)**
+For users who already have a Riverly identity (e.g., they signed up on the Personal app first and are now opening the SME app for the first time). One screen: email/phone + password, then OTP if device is unrecognised.
+
+The SME app handles product context automatically — there is no product picker. After the user authenticates:
+- The app calls `/identity/switch-product` with `productType: SME`.
+- If the identity has an SME membership → the call succeeds and the user lands on the dashboard (A8). KYB state is reflected via the banner.
+- If the identity has no SME membership yet → the call fails with a "no SME on this account" response; the app routes the user through A2 (business basics) → enrollment → dashboard. Personal / Corporate memberships the user may already have are ignored for this client; the SME app only cares about SME.
+
+### KYB upload (post-onboarding, reachable from dashboard or settings)
+
+KYB lives outside the onboarding chain. The screens below are reached either by tapping the dashboard banner or from Settings → "Business verification". The user can leave and come back any time without losing progress.
 
 **A3 — KYB document upload**
-Two required, two recommended documents (see KYB section below for rationale on which to include):
+The screen for uploading the documents. Required items:
 - CAC certificate (file upload — PDF or image)
 - CAC status report (file upload)
 - Proprietor's government ID — NIN slip / driver's license / passport (file upload)
 - Proprietor's BVN (text input — 11 digits)
+- Selfie / liveness capture (in-app camera)
 
-Followed by an in-app selfie capture for liveness/face-match against the ID.
-
-Each item is its own step or stacked on one scrollable screen — designer's call. Each accepts retry / re-upload until "Submit for review".
+Each item is its own step or stacked on one scrollable screen — designer's call. Each accepts retry / re-upload. The user can save and resume — partial uploads persist. The screen has a clearly disabled "Submit for review" button until everything is supplied; once everything is in, the button becomes the way to flip the status to Pending Review.
 
 **A4 — KYB pending review**
-After submission, user lands on a status screen. Shows: "We're reviewing your business — usually within X hours." Lists what was submitted. Has a "Contact support" affordance.
-
-**A5 — KYB approved / account ready**
-When backend flips KYB to approved, the user is bumped into the home dashboard (A8). Push notification at the same time.
+Reached after the user taps "Submit for review" on A3 — or by tapping the dashboard banner while review is in progress. Shows: "We're reviewing your business — usually within X hours." Lists what was submitted. Has a "Contact support" affordance.
 
 **A6 — KYB rejected / needs more info**
-Shows which document was rejected and why (free-text from the admin reviewer). Re-upload affordance for that specific item, plus a Submit button.
+Reached by tapping the dashboard banner when status is Rejected. Shows which document was rejected and why (free-text from the admin reviewer). Re-upload affordance for that specific item, plus a Submit button that returns the status to Pending Review.
 
-**A7 — Sign in (existing identity)**
-For users who already have a Riverly identity (e.g., they signed up on the Personal app first). One screen: email/phone + password, then OTP if device is unrecognised. If they don't yet have SME enrolled on this identity, route them through A2 → A3 → A4. If they already have SME and it's approved, go to A8. If approved but no transaction PIN set yet, go to T1.
+(There is no separate "Approved" screen — when backend flips KYB to Approved, the dashboard banner disappears and the user gains the ability to transact. A push notification announces it.)
 
 ### Home & navigation
 
 **A8 — SME dashboard (home)**
-Single business account view. Top: account balance (large), available vs ledger balance, account number with copy button. Below: a recent-transactions list (last 5–10), and quick action buttons — Send Money, Receive (shows account number / share sheet), View Transactions, Manage Account. Top-right: profile / switcher entry (see SW1).
+Single business account view. Designer needs to handle four KYB states, because the dashboard is where users live during the entire KYB lifecycle:
+
+1. **KYB Not Started** (just signed up, no documents uploaded yet) — show a prominent banner near the top: *"Verify your business to start using your account"* with a "Get started" CTA that opens A3. Below the banner, the balance card shows ₦0.00 with a subtle "Pending verification" label. Quick-action buttons (Send Money, etc.) are visible but disabled / tappable-but-blocked with a tooltip "Complete verification to enable transfers".
+2. **KYB Pending Review** (user has submitted documents, awaiting admin) — banner copy changes to *"Documents under review — we'll notify you when it's approved"* with a "View status" CTA that opens A4. Same balance + disabled-actions treatment as above.
+3. **KYB Rejected** (admin rejected at least one document) — banner becomes prominent / amber: *"Some documents need your attention"* with a CTA that opens A6. Same disabled-actions treatment.
+4. **KYB Approved** — no banner. Full dashboard: balance card with real available + ledger balance, account number with copy button, recent-transactions list, fully-enabled quick-action buttons (Send Money, Receive, View Transactions, Manage Account). Top-right: profile / switcher entry (see SW1).
+
+In all four states the bottom navigation (A9) and top chrome are identical — the variance is only in the banner area and the enabled/disabled state of transfer actions.
 
 **A9 — Bottom navigation**
 Four tabs: Home, Transactions, Profile, More. (Designer can decide on exact labels — "Wallet" might fit better than "Home", etc.)
@@ -90,7 +106,7 @@ Full record: amount, fee, total, source, destination, narration, reference, stat
 ### Profile, settings, security
 
 **S1 — Profile / business info**
-View business name, RC number, industry, address, proprietor name. Edit address + contact details (other fields are locked because they're tied to KYB).
+View business name, RC number, industry, address, proprietor name. Edit address + contact details (other fields are locked because they're tied to KYB). Also contains a "Business verification" entry that opens whichever KYB screen matches the current status — A3 if Not Started or Rejected, A4 if Pending Review. (Approved state shows a checkmark and the submission summary.)
 
 **S2 — Personal info (identity-level)**
 View/edit name, email, phone. Change password. Two-factor / device management. Logout. These fields are *identity-level* — changing them changes them across the user's other Riverly products too. The screen needs a small note to that effect.
@@ -104,17 +120,20 @@ Toggle email / push / SMS per notification category (transfers, security, market
 **S5 — Help / support**
 FAQ links, contact support (live chat or email), report a problem with a transaction.
 
-### Cross-product switcher
+### "Your other Riverly products" — informational only, not a switcher
 
-**SW1 — Switcher (top-right of every screen)**
-Tapping the avatar / icon opens a sheet showing:
-- The current identity (name, email)
-- A list of *other Riverly products this identity has access to* — for SME users, this might show "Personal — open" and/or "Corporate — open in browser"
-- "Sign out of Riverly"
+Each Riverly product is its own client surface — Personal app, SME app, Corporate web. Users do not switch products inside the SME app; the SME app is the SME app. The cross-product affordance exists only so the user can be **aware** that the same Riverly identity gives them access to the other products, and so they can **jump out** to those products if they want.
 
-Tapping "Personal — open" tries to deep-link into the installed Personal app (and offers the Play Store link if not installed). Tapping "Corporate" opens the corporate web URL with a one-time auth token so the user lands signed in.
+**SW1 — "Your other Riverly products" (inside Settings)**
+A settings-level list (not a global top-bar element). Each row represents one of the three Riverly products and shows one of three states:
 
-For an SME user who only has the SME product, the sheet just shows their identity and the logout button — no other products listed.
+- **Active here** — the SME row in the SME app. Just labelled "SME (current)".
+- **Active elsewhere** — e.g. the user has a Personal membership. Row shows "Personal — Open Personal app" with a deep-link button that tries to launch the installed Personal app and falls back to the Play Store / App Store listing.
+- **Not activated** — e.g. the user has no Corporate workspace yet. Row shows "Corporate banking — Visit our web app" with a button that opens the corporate web URL. Copy makes it clear they can sign in there with the **same email and password** they used for SME.
+
+For corporate specifically, when the user does have a corporate membership, the link can include a short-lived identity token so the corporate web app drops them straight into a signed-in session.
+
+This screen does not change the SME app's behaviour or the active token. It is pure navigation + awareness.
 
 ### Empty, loading, error states
 
@@ -148,16 +167,29 @@ Other Nigerian SME fintechs (Sparkle, Brass, Prospa) all require at minimum BVN 
 
 The SME mobile app is a brand-new app. It signs an identity in via Riverly's unified identity endpoints, enrolls them in the SME product, and from then on operates against the `/api/v1/sme/*` endpoints. All transfer / banking work flows through Anchor on the backend; frontend just calls our endpoints.
 
-### Authentication
+### Authentication & onboarding
 
-- On launch: check for a stored product-scoped JWT (`product: "SME"`). If valid → home. If absent or expired → sign-in screen.
-- On sign-in: call `POST /api/v1/identity/login` with `{ identifier, password }`. Handle:
-  - Success with SME membership → call `POST /api/v1/identity/switch-product` with `{ productType: "SME" }` to get the product JWT. Store it.
-  - Success but no SME membership yet → push the user into the SME enrollment flow (business basics → KYB upload), which calls `POST /api/v1/identity/products/sme/enroll`.
-  - Device verification required → show OTP screen, post to `POST /api/v1/auth/login/verify-device` (existing endpoint, reused).
-  - Locked / suspended → show the relevant message and a "contact support" CTA.
-- On sign-up: call `POST /api/v1/identity/signup` with `{ fullname, email, phone, password }`. Email + phone OTP verification using existing OTP endpoints. Then route into business basics → KYB.
+The SME app always operates in SME context. No product picker is ever shown to the user — the app automatically asks the backend to scope the session to SME and routes the user through enrollment if no SME membership exists yet.
+
+- On launch: check for a stored product-scoped JWT (`product: "SME"`). If valid → home (A8). If absent or expired → sign-in screen.
+- On sign-in: call `POST /api/v1/identity/login` with `{ identifier, password }`. Then immediately follow up with `POST /api/v1/identity/switch-product` body `{ productType: "SME" }`. Handle:
+  - `switch-product` returns 200 with a product JWT → store it, go to A8 (dashboard); the banner reflects current KYB status via `GET /api/v1/sme/profile`.
+  - `switch-product` returns "no SME membership" → identity exists but isn't enrolled in SME yet. Keep the identity JWT, route the user through A2 (business basics) which calls `POST /api/v1/sme/enroll`. After enrollment, repeat `switch-product` to get the SME JWT, then go to A8.
+  - Login itself fails (bad credentials, locked, suspended) → show the relevant message.
+- On sign-up: call `POST /api/v1/identity/signup` with `{ fullname, email, phone, password }`. Then A2 (business basics) → enrollment → `switch-product` → A8 (dashboard).
 - Logout: `POST /api/v1/identity/logout`, clear stored tokens, return to sign-in.
+
+The `availableProducts` array on the login response is used **only** by Settings → "Your other Riverly products" (SW1) to surface which other Riverly products this email has access to. It is not used to route the user to a different in-app context.
+
+### KYB lifecycle on the dashboard
+
+The dashboard (A8) drives the entire KYB experience. The frontend should:
+
+- On every dashboard load, call `GET /api/v1/sme/profile` and inspect the `kybStatus` field. Map to one of: `NotStarted` / `PendingReview` / `Rejected` / `Approved`.
+- Render the banner + balance card + action-button enablement based on that status (per the four states described under A8 in the design section).
+- Tapping the banner opens A3 (if Not Started or Rejected) or A4 (if Pending Review).
+- When the user finishes uploading on A3 and taps "Submit for review", call `POST /api/v1/sme/kyb/documents` once per file as they're uploaded, then `POST /api/v1/sme/kyb/submit` to flip status to PendingReview. Update local cache, return user to dashboard.
+- Listen for the `kyb.status_changed` push notification — when received, refresh `GET /api/v1/sme/profile` and re-render. This is how the dashboard transitions from PendingReview to Approved or Rejected without the user having to manually refresh.
 
 ### Token handling
 
@@ -167,18 +199,21 @@ Two tokens to manage:
 
 Refresh: backend provides a refresh-token flow. On a 401 from any product endpoint, attempt refresh once before forcing re-login.
 
-### KYB upload
+### KYB endpoints
 
-- `POST /api/v1/identity/products/sme/enroll` accepts the business basics as JSON.
-- `POST /api/v1/sme/kyb/documents` accepts the document uploads as multipart/form-data. Frontend uploads each file as it's selected so the user doesn't lose progress mid-flow.
-- Poll `GET /api/v1/sme/profile` (or subscribe to push notifications) to detect the moment KYB status flips to `Approved` and bump the user into the dashboard.
+- `POST /api/v1/identity/products/sme/enroll` accepts the business basics as JSON. Called at the end of A2. Creates the SME profile + membership, sets `kybStatus = NotStarted`. The user lands on the dashboard right after.
+- `POST /api/v1/sme/kyb/documents` accepts file uploads as multipart/form-data, one call per file (or one call with all files — backend supports both). Idempotent: re-uploading the same document slot replaces the previous file. Status stays at `NotStarted` while uploads accumulate.
+- `POST /api/v1/sme/kyb/submit` flips status from `NotStarted` to `PendingReview`. Fails if any required document is missing.
+- `GET /api/v1/sme/profile` returns the current `kybStatus` plus a `kybDocuments` array (which slots are filled, which aren't, any rejection reasons from admin).
 
 ### SME endpoints to integrate
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/v1/sme/profile` | Profile + KYB status |
+| GET | `/api/v1/sme/profile` | Profile + KYB status + document slots |
 | PATCH | `/api/v1/sme/profile` | Edit address / contact |
+| POST | `/api/v1/sme/kyb/documents` | Upload one KYB document (multipart) — idempotent per slot |
+| POST | `/api/v1/sme/kyb/submit` | Submit completed KYB for admin review (NotStarted → PendingReview) |
 | GET | `/api/v1/sme/account` | Bank account details (account number, etc.) |
 | GET | `/api/v1/sme/account/balance` | Balance refresh |
 | POST | `/api/v1/sme/transaction-pin/set` | First-time PIN |
