@@ -3,11 +3,14 @@
 **Status:** Living document. Updated every time a new endpoint ships.
 **Audience:** Frontend / mobile engineers building the SME app.
 **Base URL (staging):** `https://api.riverly.ng`
-**Last refreshed:** 2026-05-26 — **Onboarding rebuilt to match Femi's BE-102 → BE-109 tickets.**
+**Last refreshed:** 2026-05-26 — Resend email + Firebase push are now live; magic OTP `111111` retired.
 
 > **READ ME FIRST — the onboarding flow has changed.** The single-step `/api/v1/sme/enroll` payload (and the old `/api/v1/identity/signup` that took `fullName + password`) are gone. Onboarding is now a 7-step flow. See **Section 0 — Onboarding flow (BE-102 → BE-109)** below. The legacy endpoints documented further down still exist for everything *post-onboarding* (dashboard, transfers, settings, etc.).
 
-> **Firebase / FCM status:** push device registration (`/api/v1/sme/push/devices`) still works — it stores tokens. **Actual push delivery is pending** while ops finalises the Firebase project + service-account credentials. The same applies to SendGrid (welcome email) and Twilio (welcome SMS). OTPs and welcome messages are stubbed to `_logger.LogInformation` — they appear in the staging logs so QA can pull codes during testing.
+> **Provider status:**
+> - **Email (Resend) — LIVE.** Real OTP + welcome emails ship from `noreply@mail.riverly.ng`. No code workaround needed any more.
+> - **Push (Firebase Cloud Messaging) — LIVE.** Register a device token via `POST /api/v1/sme/push/devices` and you'll start receiving pushes on `deposit`, `transfer`, and `kyb` events.
+> - **SMS — MOCKED.** Phone OTP + welcome SMS still write to the staging log only; no real provider yet. Phone OTPs are still validated server-side, so the FE flow works — codes just appear in logs instead of an SMS.
 
 ---
 
@@ -46,7 +49,9 @@ Response `data` includes `accessToken` (identity, 7-day), plus `emailVerified`, 
 { "code": "123456" }
 ```
 
-Validation rules (in `OtpService`): 6 digits, 10-minute expiry, 5 attempts per OTP, 3 resends per 10 minutes. These follow the existing OTP infrastructure — adding stricter constraints isn't necessary right now per product decision.
+Validation rules (in `OtpService`): 6 digits, 10-minute expiry, 5 attempts per OTP, 3 resends per 10 minutes.
+
+**Email OTPs** are delivered for real via Resend — they land in the user's inbox within seconds. **Phone OTPs** are still log-only until an SMS provider is wired (Termii or similar). For staging, FE can read phone OTPs from CloudWatch.
 
 ### Business profile (BE-106)
 
