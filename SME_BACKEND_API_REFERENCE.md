@@ -3,14 +3,24 @@
 **Status:** Living document. Updated every time a new endpoint ships.
 **Audience:** Frontend / mobile engineers building the SME app.
 **Base URL (staging):** `https://api.riverly.ng`
-**Last refreshed:** 2026-05-26 — Resend email + Firebase push are now live; magic OTP `111111` retired.
+**Last refreshed:** 2026-05-29 — Femi's RIV-PAY-001…004 + PAY-SYS-01…05 batch is live. Sendchamp SMS is wired (awaiting wallet funding).
+
+> **What changed since 2026-05-26 (read this if you've been building against the old doc):**
+> 1. **Phone SMS via Sendchamp.** Phone OTP is now 5 digits (was logged-only); delivered by Sendchamp from sender `SC-OTP` the moment the wallet is funded. See §0 OTP rules.
+> 2. **Both OTPs fire at signup.** Signup-success copy is now `"We've sent verification codes to your email and phone."`
+> 3. **Transfer flow has stricter validation, a PIN attempt counter, and a 10-min pending expiry.** See §7 (transfer) and §8 (PIN).
+> 4. **Beneficiaries: name-lookup is required before save**, and the saved name is the bank-verified one — not what the FE sends. See §9.
+> 5. **Server-side recipient search.** `GET /sme/beneficiaries?search=<text>` filters by name/nickname.
+> 6. **Rate limits on payment-flow endpoints.** Hit `429` and back off. See each section.
+> 7. **Sanitization on free-text** (narration, nickname, search). HTML/script content is stripped before the value is stored.
+> 8. **Append-only payment audit log** runs transparently — FE behaviour unchanged, but ops can now trace every name lookup, PIN attempt, transfer create, and transfer completion.
 
 > **READ ME FIRST — the onboarding flow has changed.** The single-step `/api/v1/sme/enroll` payload (and the old `/api/v1/identity/signup` that took `fullName + password`) are gone. Onboarding is now a 7-step flow. See **Section 0 — Onboarding flow (BE-102 → BE-109)** below. The legacy endpoints documented further down still exist for everything *post-onboarding* (dashboard, transfers, settings, etc.).
 
 > **Provider status:**
 > - **Email (Resend) — LIVE.** Real OTP + welcome emails ship from `noreply@mail.riverly.ng`. No code workaround needed any more.
 > - **Push (Firebase Cloud Messaging) — LIVE.** Register a device token via `POST /api/v1/sme/push/devices` and you'll start receiving pushes on `deposit`, `transfer`, and `kyb` events.
-> - **SMS — MOCKED.** Phone OTP + welcome SMS still write to the staging log only; no real provider yet. Phone OTPs are still validated server-side, so the FE flow works — codes just appear in logs instead of an SMS.
+> - **SMS (Sendchamp) — INTEGRATED, AWAITING WALLET.** Phone OTP code generation, send, and verify are all wired through Sendchamp's `/verification/create` + `/verification/confirm`. Real SMS will deliver as soon as the Sendchamp wallet is funded; until then the API call fails-soft (signup still completes, email OTP still works, but no SMS reaches the phone). Once funded: no FE change required.
 
 ---
 
@@ -46,12 +56,17 @@ Response `data` includes `accessToken` (identity, 7-day), plus `emailVerified`, 
 ### OTP verify payloads (BE-103 / BE-104)
 
 ```json
-{ "code": "123456" }
+{ "code": "12345" }     // phone — 5 digits (Sendchamp)
+{ "code": "123456" }    // email — 6 digits (Riverly)
 ```
 
-Validation rules (in `OtpService`): 6 digits, 10-minute expiry, 5 attempts per OTP, 3 resends per 10 minutes.
+Validation rules:
+- **Email OTP** (Riverly's `OtpService`): 6 digits, 10-min expiry, 5 attempts per OTP, 3 resends per 10 minutes. Delivered for real via Resend.
+- **Phone OTP** (Sendchamp's `/verification/*` endpoints): 5 digits, 10-min expiry, attempt + resend limits enforced by Sendchamp. Sender ID `SC-OTP`. Delivered via SMS the moment the Sendchamp wallet has balance; if the wallet is empty the API call fails-soft and the user can still complete signup on the email channel.
 
-**Email OTPs** are delivered for real via Resend — they land in the user's inbox within seconds. **Phone OTPs** are still log-only until an SMS provider is wired (Termii or similar). For staging, FE can read phone OTPs from CloudWatch.
+Resend cooldown returns `60` (seconds) so the FE can show a countdown.
+
+**During the funding gap:** phone OTP codes still log to CloudWatch on the server side (Sendchamp's `Low balance` response is logged with the request) — QA can read them there if needed. Real users should use email verification.
 
 ### Business profile (BE-106)
 
@@ -386,6 +401,10 @@ Looks up the account name for a (bank, accountNumber) pair.
 
 `isValid: false` with `accountName: null` means Anchor couldn't resolve. FE should disable the "Continue" button until `isValid: true`.
 
+**Side-effect (RIV-PAY-002):** a successful lookup is cached server-side for 10 minutes against this identity. Saving the recipient (`POST /sme/beneficiaries`) within that window is allowed; outside it, the save endpoint rejects with `"Please look up the account name before saving this recipient."` — re-call this endpoint to refresh.
+
+**Rate limit:** `10 requests / minute / user`. Exceeded → `429`. Anchor lookup itself has a server-side 10-second timeout; on timeout the response is `isValid: false` and the lookup is audited as `errorCode="lookup_failed"`.
+
 ### `POST /api/v1/sme/transfers/external`
 Initiate an outbound bank transfer.
 
@@ -404,15 +423,32 @@ Initiate an outbound bank transfer.
 
 **Success (`data`):** the transaction summary (same shape as transactions list, `status: Pending` typically — settled later via webhook).
 
+**Amount rules (RIV-PAY-003):** server enforces, regardless of any client-side check.
+- Min: ₦100
+- Max single transfer: ₦5,000,000
+- Validation errors: `"Amount must be a positive number."`, `"Minimum transfer is ₦100.00."`, `"Maximum single transfer is ₦5,000,000.00."`
+
+**Narration (PAY-SYS-03):** sanitized on the server — HTML tags, script/style blocks, dangerous URL schemes (`javascript:`, `data:`), and event handlers are stripped before the value is stored or sent to Anchor. Max 300 chars after sanitization.
+
 **Common failures (all friendly):**
 - `Please enter your 4-digit transaction PIN.` (validation)
 - `Transaction PIN is not set. Set your PIN before making transfers.`
-- `Incorrect transaction PIN.`
+- `Incorrect transaction PIN. N attempts remaining.` (RIV-PAY-004 — counter is user-level, 10-min window)
+- `Transfer locked after 3 incorrect PIN attempts. Please reset your PIN to continue.` (this transfer reference is now locked for 1 hour — FE should route the user to `/transaction-pin/forgot`)
+- `This transfer is locked because of too many incorrect PIN attempts. Please reset your PIN to continue.` (same reference re-attempted after lockout)
 - `Insufficient balance.`
 - `The transfer couldn't be completed. Please try again in a moment.` (Anchor-side failure)
 - `Transfer already submitted.` (you reused an idempotencyKey)
 
-**Idempotency:** ALWAYS generate a fresh `idempotencyKey` (UUID) when the user lands on the review screen. Reuse it for retries of the same logical submission. Server returns the existing transaction if the key matches an earlier call — never double-sends.
+**Idempotency + concurrency (PAY-SYS-01 / PAY-SYS-02):**
+- ALWAYS generate a fresh `idempotencyKey` (UUID) when the user lands on the review screen. Reuse it for retries of the same logical submission.
+- Server returns the existing transaction if the key matches an earlier call — never double-sends.
+- The whole balance-check + Anchor-call + deduct sequence runs in a serializable PostgreSQL transaction with a row lock on the account; concurrent transfers from the same SME account serialize. There's nothing for the FE to do about this — just be aware that a parallel transfer attempt may briefly block instead of failing.
+- A transfer in Pending state for **more than 10 minutes** is auto-cancelled by a background sweeper (Status flips to `Failed`, error code `pending_expired`). If your retry lands after this, treat it as a fresh transfer with a new idempotency key.
+
+**Rate limit:** `5 requests / minute / user`. Exceeded → `429`.
+
+**Audit (PAY-SYS-05):** every PIN attempt (success or fail), transfer creation, and transfer completion is written to `paymentAuditLogs`. Account numbers are masked, PIN values are NEVER stored. Transparent to the FE.
 
 ---
 
@@ -433,6 +469,8 @@ Initiate an outbound bank transfer.
 
 Use this if you want to gate a sensitive action with PIN re-entry without actually submitting a transfer.
 
+**Rate limit:** `5 requests / minute / user`. Exceeded → `429`.
+
 ### `POST /api/v1/sme/transaction-pin/change`
 **Request:** `{ "currentPin": "7392", "newPin": "5837", "confirmNewPin": "5837" }`
 
@@ -447,8 +485,11 @@ Identity proof is the account password (we don't have email/SMS OTP wired yet). 
 
 ## 9. Beneficiaries
 
-### `GET /api/v1/sme/beneficiaries`
-Returns all saved recipients ordered by most-recently-used.
+### `GET /api/v1/sme/beneficiaries?search=<text>` (RIV-PAY-001)
+Returns saved recipients ordered by most-recently-used. Empty list when the user has none.
+
+**Query params (all optional):**
+- `search` — case-insensitive substring match on `accountName` OR `nickname`. Server-side, sanitized before the `LIKE` filter so a malicious string can't be re-rendered from a stored beneficiary. Whitespace-only is treated as no filter.
 
 **Response (`data`):** array of:
 ```json
@@ -461,17 +502,21 @@ Returns all saved recipients ordered by most-recently-used.
   "createdAt": "...", "lastUsedAt": "..." }
 ```
 
-### `POST /api/v1/sme/beneficiaries`
+### `POST /api/v1/sme/beneficiaries` (RIV-PAY-002)
 **Request:**
 ```json
-{ "accountName": "Alika Mohammed",
+{ "accountName": "Alika Mohammed",   // IGNORED — see below
   "accountNumber": "0123456789",
   "bankCode": "000013",
   "bankName": "GTBANK PLC",
   "nickname": "Alika" }
 ```
 
-**Idempotent:** posting the same `(accountNumber, bankCode)` twice doesn't duplicate — refreshes nickname + `lastUsedAt` and returns the existing row.
+**Behavior changed in this batch:**
+- **A successful `POST /sme/name-enquiry` for the same `(accountNumber, bankCode)` must have happened within the last 10 minutes for this identity.** If not, returns `"Please look up the account name before saving this recipient."` FE flow: name-enquiry → confirm with user → save. Both in the same screen flow.
+- **The saved `accountName` is the bank-verified one** from the most recent lookup — whatever the FE sends in `accountName` is ignored. This prevents a user from saving "John Doe" against an account whose lookup returned a different name.
+- **Duplicate save is now an error**, not a silent refresh: `"This recipient is already saved on your account."` Look it up in the list and reuse it. (Pre-existing rows still get their `lastUsedAt` bumped automatically when the recipient is used inside a transfer's `saveBeneficiary: true` path.)
+- `nickname` is sanitized (HTML/script stripped) before storage.
 
 ### `DELETE /api/v1/sme/beneficiaries/{id}`
 Hard delete. Returns `status: true` on success.
@@ -527,9 +572,13 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 - **One SME profile per identity** for now. A user can't open a second SME under the same email.
 - **Account is single-account-per-profile** (MVP). One business account.
 - **NGN only**, kobo conversion handled server-side. FE sends amounts in NGN (e.g., `1000.00`).
-- **Transfer amount range:** ₦1 – ₦5,000,000 per transaction.
-- **PIN rules:** exactly 4 digits, not sequential, not repeated.
+- **Transfer amount range:** ₦100 – ₦5,000,000 per transaction. Server validates regardless of any DTO-level check.
+- **PIN rules:** exactly 4 digits, not sequential, not repeated. Max 3 wrong attempts (user-level, 10-min window) → that transfer reference is locked for 1 hour → reset via `/transaction-pin/forgot`.
+- **Pending transfer TTL:** 10 minutes. Pending transfers older than this are auto-cancelled by a background sweeper (every 60s).
 - **Idempotency keys:** required for transfers; recommended UUIDs.
+- **Free-text sanitization:** narration, nickname, and search are stripped of HTML/script content before storage. Don't try to send rich text or markdown — it'll be flattened.
+- **Rate limits (429 on breach):** signup `5/min`, login `10/min`, name-enquiry `10/min`, transfers + PIN endpoints `5/min`.
+- **Same-session lookup:** saving a recipient (`POST /sme/beneficiaries`) requires a successful `/sme/name-enquiry` for the same (bank, account) within the previous 10 minutes — the saved name is bank-verified, not FE-supplied.
 
 ---
 
