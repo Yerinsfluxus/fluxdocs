@@ -7,13 +7,14 @@
 
 > **What changed since 2026-05-26 (read this if you've been building against the old doc):**
 > 1. **Phone SMS via Sendchamp.** Phone OTP is now 5 digits (was logged-only); delivered by Sendchamp from sender `SC-OTP` the moment the wallet is funded. See §0 OTP rules.
-> 2. **Both OTPs fire at signup.** Signup-success copy is now `"We've sent verification codes to your email and phone."`
+> 2. **OTPs are now SEQUENTIAL, not parallel.** Phone fires at signup; email fires automatically when phone is verified or skipped. Signup-success copy is `"Sign-up successful. We've sent a code to your phone."` Phone-verify-success copy when email is on file: `"Phone verified. We've sent a code to your email."` This avoids the 10-min TTL expiry race a slow user could otherwise hit between the two OTP screens.
 > 3. **Transfer flow has stricter validation, a PIN attempt counter, and a 10-min pending expiry.** See §7 (transfer) and §8 (PIN).
 > 4. **Beneficiaries: name-lookup is required before save**, and the saved name is the bank-verified one — not what the FE sends. See §9.
 > 5. **Server-side recipient search.** `GET /sme/beneficiaries?search=<text>` filters by name/nickname.
 > 6. **Rate limits on payment-flow endpoints.** Hit `429` and back off. See each section.
 > 7. **Sanitization on free-text** (narration, nickname, search). HTML/script content is stripped before the value is stored.
 > 8. **Append-only payment audit log** runs transparently — FE behaviour unchanged, but ops can now trace every name lookup, PIN attempt, transfer create, and transfer completion.
+> 9. **Personal signup is now two-screen-friendly via `/identity/email/add`** (cross-product context — see §0 OTP rules). SME still submits name+phone+email together at `/identity/signup`.
 
 > **READ ME FIRST — the onboarding flow has changed.** The single-step `/api/v1/sme/enroll` payload (and the old `/api/v1/identity/signup` that took `fullName + password`) are gone. Onboarding is now a 7-step flow. See **Section 0 — Onboarding flow (BE-102 → BE-109)** below. The legacy endpoints documented further down still exist for everything *post-onboarding* (dashboard, transfers, settings, etc.).
 
@@ -66,7 +67,29 @@ Validation rules:
 
 Resend cooldown returns `60` (seconds) so the FE can show a countdown.
 
+**Sequential dispatch (important):**
+- Only the phone OTP fires at `/identity/signup`. The email OTP is dispatched **automatically** when phone is verified (`/phone/verify` success) or skipped (`/phone/skip`).
+- This means a slow user can never have a stale email code waiting for them at the email screen — it's freshly issued the moment they finish the phone step.
+- For Personal users who don't even have an email at signup, the email OTP dispatch happens on `/identity/email/add` instead (see §0.2 below).
+
 **During the funding gap:** phone OTP codes still log to CloudWatch on the server side (Sendchamp's `Low balance` response is logged with the request) — QA can read them there if needed. Real users should use email verification.
+
+---
+
+### 0.2. Cross-product addendum: Personal email-add flow
+
+The SME app submits name + phone + email together at signup, so this section is informational for SME. It matters for Personal (and anywhere else that wants to defer email until a later screen).
+
+`POST /api/v1/identity/email/add` — body `{ "email": "user@example.com" }`. Requires identity bearer token.
+
+- Sets the email on the identity row.
+- Dispatches the email OTP immediately. Success response message: `"We've sent a code to your email."`
+- Re-callable if the user wants to change the email before it's verified (each call clears any previous `EmailVerifiedAt` and re-sends).
+- Rejected if another identity already owns this email (`"An account with this email already exists. Please log in instead."`).
+- Rejected if this identity already has a *verified* email and is trying to switch (`"Your email is already verified. Use settings to change it."`).
+- Rate-limited via the shared `"otp"` bucket (5 / minute / user).
+
+After this returns, the FE flow is the same as SME: `POST /identity/email/verify { code }`.
 
 ### Business profile (BE-106)
 
