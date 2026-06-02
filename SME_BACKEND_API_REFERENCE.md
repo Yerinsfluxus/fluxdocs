@@ -3,18 +3,26 @@
 **Status:** Living document. Updated every time a new endpoint ships.
 **Audience:** Frontend / mobile engineers building the SME app.
 **Base URL (staging):** `https://api.riverly.ng`
-**Last refreshed:** 2026-05-29 — Femi's RIV-PAY-001…004 + PAY-SYS-01…05 batch is live. Sendchamp SMS is wired (awaiting wallet funding).
+**Last refreshed:** 2026-06-02 — BE-01 (in-app KYB) shipped end to end. Three phases live on staging: transaction guard + status emails + reviewer tracking (Phase 1), owner-personal data + new doc slots (Phase 2), private S3 + multipart upload + presigned URLs (Phase 3).
 
-> **What changed since 2026-05-26 (read this if you've been building against the old doc):**
-> 1. **Phone SMS via Sendchamp.** Phone OTP is now 5 digits (was logged-only); delivered by Sendchamp from sender `SC-OTP` the moment the wallet is funded. See §0 OTP rules.
-> 2. **OTPs are now SEQUENTIAL, not parallel.** Phone fires at signup; email fires automatically when phone is verified or skipped. Signup-success copy is `"Sign-up successful. We've sent a code to your phone."` Phone-verify-success copy when email is on file: `"Phone verified. We've sent a code to your email."` This avoids the 10-min TTL expiry race a slow user could otherwise hit between the two OTP screens.
-> 3. **Transfer flow has stricter validation, a PIN attempt counter, and a 10-min pending expiry.** See §7 (transfer) and §8 (PIN).
-> 4. **Beneficiaries: name-lookup is required before save**, and the saved name is the bank-verified one — not what the FE sends. See §9.
-> 5. **Server-side recipient search.** `GET /sme/beneficiaries?search=<text>` filters by name/nickname.
-> 6. **Rate limits on payment-flow endpoints.** Hit `429` and back off. See each section.
-> 7. **Sanitization on free-text** (narration, nickname, search). HTML/script content is stripped before the value is stored.
-> 8. **Append-only payment audit log** runs transparently — FE behaviour unchanged, but ops can now trace every name lookup, PIN attempt, transfer create, and transfer completion.
-> 9. **Personal signup is now two-screen-friendly via `/identity/email/add`** (cross-product context — see §0 OTP rules). SME still submits name+phone+email together at `/identity/signup`.
+> **What changed since 2026-05-29 (read this section if you've been building against the old doc):**
+> 1. **KYB Phase 2 (post-signup) is now fully spec-aligned.** New endpoint `POST /sme/kyb/owner-personal` captures the business owner's title, DOB, and personal address. Required document set is now `CacCertificate` + `CacForm7` + `ProofOfPersonalAddress` + `ProofOfBusinessAddress`. The old slots (CacStatusReport, ProprietorId, ProprietorBvn, Selfie) still upload but no longer gate submission. See [§5](#5-sme-enrollment--kyb).
+> 2. **Status enum gained `ActionRequired`.** Five states now: `NotStarted, PendingReview, Approved, Rejected, ActionRequired`. Ops can flag a submission for follow-up instead of outright rejecting it. The user re-uploads, resubmits, status flows back to PendingReview. See [§5.2](#52-kyb-status--dashboard-banner).
+> 3. **Document upload now has two paths.** Legacy URL-handoff (`POST /sme/kyb/documents`) still works. **Prefer the new multipart path** (`POST /sme/kyb/documents/upload`) — it streams the file through the BE, server-validates mime + size (PDF / JPG / PNG ≤ 5 MB), and lands the file in a private S3 bucket. See [§5.4](#54-kyb-document-upload).
+> 4. **Documents are now private.** New uploads store an opaque S3 key, not a public URL. To view a doc, call `GET /sme/kyb/documents/{slot}/url` — returns a short-lived (15-min) presigned URL. The bulk `/sme/profile` response no longer carries inline URLs for private rows. See [§5.5](#55-get-document-url-presigned).
+> 5. **Transaction guard.** `POST /sme/transfers/external` now rejects with a status-aware message when `kybStatus != Approved`. Gate transfer UI client-side too. See [§7.transfer-guard](#post-apiv1smetransfersexternal).
+> 6. **Status emails on every transition.** Submit / Approve / Reject / ActionRequired all trigger a Resend email *in addition to* the push notification. Nothing for the FE to do — just heads-up.
+> 7. **New single-shot SME enrollment endpoint.** `POST /api/v1/identity/products/sme/enroll` mirrors the Personal + Corporate enroll endpoints. Collapses the 7-step BE-106→BE-109 onboarding into one call for scripted setups. UI flow unchanged. See [§5.1](#51-single-shot-enrollment-new).
+> 8. **Staging-only `debugOtpCode` in OTP responses.** Email-OTP-firing endpoints (`/identity/signup`, `/email/resend`, `/email/add`, `/phone/skip`, `/phone/verify`-success) return `data.debugOtpCode` on non-prod hosts. Lets you test against fake email addresses. Always `null` in production.
+>
+> **What changed since 2026-05-26 (older — still applies):**
+> 9. **Phone SMS via Sendchamp.** Phone OTP is now 5 digits (was logged-only); delivered by Sendchamp from sender `SC-OTP` the moment the wallet is funded.
+> 10. **OTPs are SEQUENTIAL.** Phone fires at signup; email fires automatically when phone is verified or skipped. Avoids the 10-min TTL expiry race.
+> 11. **Transfer flow has stricter validation, a PIN attempt counter, and a 10-min pending expiry.** See [§7](#7-banks-name-enquiry-external-transfer) and [§8](#8-transaction-pin).
+> 12. **Beneficiaries: name-lookup is required before save**, saved name is bank-verified. Server-side recipient search via `?search=`. See [§9](#9-beneficiaries).
+> 13. **Rate limits on payment-flow endpoints.** Hit `429` and back off.
+> 14. **Free-text sanitization** (narration, nickname, search). HTML/script content stripped.
+> 15. **Append-only payment audit log** runs transparently.
 
 > **READ ME FIRST — the onboarding flow has changed.** The single-step `/api/v1/sme/enroll` payload (and the old `/api/v1/identity/signup` that took `fullName + password`) are gone. Onboarding is now a 7-step flow. See **Section 0 — Onboarding flow (BE-102 → BE-109)** below. The legacy endpoints documented further down still exist for everything *post-onboarding* (dashboard, transfers, settings, etc.).
 
@@ -22,6 +30,42 @@
 > - **Email (Resend) — LIVE.** Real OTP + welcome emails ship from `noreply@mail.riverly.ng`. No code workaround needed any more.
 > - **Push (Firebase Cloud Messaging) — LIVE.** Register a device token via `POST /api/v1/sme/push/devices` and you'll start receiving pushes on `deposit`, `transfer`, and `kyb` events.
 > - **SMS (Sendchamp) — INTEGRATED, AWAITING WALLET.** Phone OTP code generation, send, and verify are all wired through Sendchamp's `/verification/create` + `/verification/confirm`. Real SMS will deliver as soon as the Sendchamp wallet is funded; until then the API call fails-soft (signup still completes, email OTP still works, but no SMS reaches the phone). Once funded: no FE change required.
+
+---
+
+## Table of contents
+
+- [0. Onboarding flow (BE-102 → BE-109)](#0-onboarding-flow-be-102--be-109)
+  - [Sign-up payload (BE-102)](#sign-up-payload-be-102)
+  - [OTP verify payloads (BE-103 / BE-104)](#otp-verify-payloads-be-103--be-104)
+  - [Business profile (BE-106)](#business-profile-be-106)
+  - [Logo upload (BE-106 comment)](#logo-upload-be-106-comment)
+  - [Owner role (BE-107)](#owner-role-be-107)
+  - [Address (BE-108)](#address-be-108)
+  - [Password (BE-109)](#password-be-109)
+- [0.1 Public reference endpoints](#01-public-reference-endpoints)
+- [1. Auth model (read this first)](#1-auth-model-read-this-first)
+- [2. Response envelope](#2-response-envelope)
+- [3. HTTP status codes](#3-http-status-codes)
+- [4. Identity endpoints](#4-identity-endpoints)
+- [**5. SME enrollment + KYB (BE-01 — UPDATED)**](#5-sme-enrollment--kyb)
+  - [5.1 Single-shot enrollment (NEW)](#51-single-shot-enrollment-new)
+  - [5.2 KYB status + dashboard banner](#52-kyb-status--dashboard-banner)
+  - [5.3 Business owner personal info (NEW)](#53-business-owner-personal-info-new)
+  - [5.4 KYB document upload](#54-kyb-document-upload)
+  - [5.5 Get document URL (presigned, NEW)](#55-get-document-url-presigned-new)
+  - [5.6 Submit KYB for review](#56-submit-kyb-for-review)
+  - [5.7 What ops can do (status transitions)](#57-what-ops-can-do-status-transitions)
+- [6. Account, balance, transactions](#6-account-balance-transactions)
+- [7. Banks, name enquiry, external transfer](#7-banks-name-enquiry-external-transfer)
+- [8. Transaction PIN](#8-transaction-pin)
+- [9. Beneficiaries](#9-beneficiaries)
+- [9.5 Settings, notifications, support, push devices](#95-settings-notifications-support-push-devices-slice-5)
+- [10. Webhooks (read-only context for FE)](#10-webhooks-read-only-context-for-fe)
+- [11. Known constraints + business rules](#11-known-constraints--business-rules)
+- [12. End-to-end happy path (cheat sheet)](#12-end-to-end-happy-path-cheat-sheet)
+- [13. Verification status](#13-verification-status-smoke-tested-on-staging)
+- [14. Changelog](#14-changelog)
 
 ---
 
@@ -73,6 +117,8 @@ Resend cooldown returns `60` (seconds) so the FE can show a countdown.
 - For Personal users who don't even have an email at signup, the email OTP dispatch happens on `/identity/email/add` instead (see §0.2 below).
 
 **During the funding gap:** phone OTP codes still log to CloudWatch on the server side (Sendchamp's `Low balance` response is logged with the request) — QA can read them there if needed. Real users should use email verification.
+
+**Staging-only debug echo (`data.debugOtpCode`):** when the host is not Production, every email-OTP-firing response (`/identity/signup`, `/email/resend`, `/email/add`, `/phone/skip`, `/phone/verify`-success when email is on file) carries a `debugOtpCode` field with the plaintext 6-digit code. Always `null` in production. Use it to test signup/recovery flows against fake email addresses without checking the inbox. Phone OTPs (Sendchamp) cannot be echoed this way — the code is generated on Sendchamp's side, not ours.
 
 ---
 
@@ -272,82 +318,257 @@ Used by Settings → "Your other Riverly products". Returns the identity profile
 
 ## 5. SME enrollment + KYB
 
-### `POST /api/v1/sme/enroll`
-Auth: identity token (this happens before `switch-product` succeeds).
+Two ways to enroll a new SME identity into the Riverly SME product:
+
+- **The 7-step UI flow** documented in [§0](#0-onboarding-flow-be-102--be-109): signup → phone verify → email verify → business profile → owner role → address → password. This is what the SME app walks the user through; persists state across steps. Use this for any FE-driven enrollment.
+- **The single-shot API endpoint** ([§5.1](#51-single-shot-enrollment-new)): one POST, all the fields. Use this for scripted setups, QA, integration tests.
+
+KYB Phase 2 (post-signup; this is BE-01) happens AFTER the user has an SME profile and is on the dashboard. It requires owner-personal info ([§5.3](#53-business-owner-personal-info-new)) + four documents ([§5.4](#54-kyb-document-upload)), then a submit-for-review call. Ops takes over from there ([§5.7](#57-what-ops-can-do-status-transitions)).
+
+### 5.1 Single-shot enrollment (NEW)
+
+`POST /api/v1/identity/products/sme/enroll`
+
+Auth: identity token (post-signup, post-OTP-verify).
+
+Collapses BE-106 (business info) + BE-109 (password) into one call. Owner role + address can be done afterwards via the existing onboarding endpoints if needed.
 
 **Request:**
 ```json
-{ "businessName": "Acme Ventures",
-  "rcNumber": "BN12345",
-  "industry": "Technology",
-  "businessAddress": "12 Adeola Odeku",
-  "city": "Lagos",
-  "state": "Lagos",
-  "postalCode": "100001",
-  "country": "Nigeria" }
-```
-
-**Success:** SME profile created, KYB state = `NotStarted`. User can now `switch-product` and land on the dashboard.
-
-**Common failures:** `This RC number is already registered.`, plus validation errors.
-
-### `GET /api/v1/sme/profile`
-Returns the SME profile **plus** the KYB document state. This is the single source of truth for the dashboard banner.
-
-**Response shape (data):**
-```json
-{ "id": "<guid>",
-  "businessName": "...",
-  "rcNumber": "...",
-  "industry": "...",
-  "businessAddress": "...",
-  "city": "...", "state": "...", "postalCode": "...", "country": "Nigeria",
-  "kybStatus": "NotStarted" | "PendingReview" | "Approved" | "Rejected",
-  "kybRejectionReason": null | "string",
-  "kybSubmittedAt": null | "ISO",
-  "kybReviewedAt":  null | "ISO",
-  "accountNumber":  null | "string",       // populated after KYB approved
-  "documents": [
-    { "slot": "CacCertificate", "fileUrl": "...", "fileName": "...", "uploadedAt": "..." }
-  ],
-  "missingRequiredSlots": ["ProprietorBvn", "Selfie"]  // empty when all uploaded
+{
+  "businessName": "Acme Ventures",
+  "businessRegistrationNumber": "BN12345",
+  "industry": "fashion-apparel",
+  "description": "We sell hand-poured candles…",  // optional, 20-500 chars
+  "password": "AcmeRocks!9",
+  "websiteUrl": "https://acme.ng",                 // optional
+  "logoUrl": null                                  // optional
 }
 ```
 
-**FE: drive the dashboard banner off `kybStatus`:**
-- `NotStarted` → "Verify your business to start using your account."
-- `PendingReview` → "Documents under review — we'll notify you."
-- `Rejected` → "Some documents need your attention" + show `kybRejectionReason`.
-- `Approved` → no banner, account is live.
+**Response (`data`):**
+```json
+{
+  "identityId":   "<guid>",
+  "smeProfileId": "<guid>",
+  "membershipId": "<guid>",
+  "role":         "Owner"
+}
+```
 
-### `POST /api/v1/sme/kyb/documents`
-Upload one slot. Idempotent per slot (re-upload replaces).
+**Side effects:** sets `identity.PasswordHash`, stamps `identity.OnboardingCompletedAt`, creates `SmeProfile` (KYB state `NotStarted`) + `ProductMembership(ProductType=Sme, Role=Owner)`.
+
+**Common failures:** `Please verify your email or phone before continuing.`, `Business registration number is required.`, `Password must be at least 8 characters.`, `You already have an SME profile.`
+
+---
+
+### 5.2 KYB status + dashboard banner
+
+`GET /api/v1/sme/profile` is the single source of truth.
+
+**Response shape (`data`):**
+```json
+{
+  "id": "<guid>",
+  "businessName": "...",
+  "businessRegistrationNumber": "...",
+  "industry": "...",
+
+  // Operating + registered business address (from BE-108)
+  "operatingAddressLine": "...",
+  "operatingCity": "...",
+  "operatingState": "...",
+  "operatingPostalCode": "...",
+  "operatingCountry": "Nigeria",
+  "isRegisteredAddressSameAsOperating": true,
+  // registeredAddressLine / registeredCity / etc. — populated only when above = false
+
+  // BE-01 KYB status
+  "kybStatus": "NotStarted" | "PendingReview" | "Approved" | "Rejected" | "ActionRequired",
+  "kybRejectionReason": null | "string",
+  "kybSubmittedAt": null | "ISO",
+  "kybReviewedAt":  null | "ISO",
+  "accountNumber":  null | "string",         // populated AFTER KYB approved
+
+  // BE-01 Section A — business owner personal info (see §5.3)
+  "ownerTitle":           null | "Mr" | "Mrs" | "Miss",
+  "ownerDateOfBirth":     null | "YYYY-MM-DD",
+  "ownerPersonalStreet":  null | "string",
+  "ownerPersonalState":   null | "string",
+  "ownerPersonalCountry": null | "Nigeria",
+  "ownerPersonalCompleted": true | false,    // computed — all 5 owner fields present
+
+  // BE-01 Section B — documents
+  "documents": [
+    {
+      "slot": "CacCertificate",
+      "fileUrl": "",                          // empty for private/new rows
+      "fileName": "cac-cert.pdf",
+      "uploadedAt": "ISO",
+      "isPrivate": true,                      // true = call §5.5 to get a URL; false = use fileUrl directly
+      "fileSizeBytes": 184320
+    }
+  ],
+  "missingRequiredSlots": ["CacForm7", "ProofOfPersonalAddress"]   // empty when all four uploaded
+}
+```
+
+**Drive the dashboard banner off `kybStatus`:**
+
+| `kybStatus` | Banner copy | What the user does next |
+|---|---|---|
+| `NotStarted` | "Verify your business to start using your account." | Tap → start KYB flow (owner-personal + docs) |
+| `PendingReview` | "Documents under review — we'll notify you." | Wait (1–2 business days). Push + email come on transition. |
+| `Approved` | *(no banner — account is live)* | Transact freely. |
+| `Rejected` | "Your verification wasn't approved." + show `kybRejectionReason` | Open KYB screen, re-upload docs, resubmit. Status flips to `NotStarted` on re-upload. |
+| `ActionRequired` | "We need a couple more details on your verification." + show `kybRejectionReason` | Same flow as Rejected — re-upload flagged docs, resubmit. |
+
+**FE submit-button gate:** enable only when `ownerPersonalCompleted === true` AND `missingRequiredSlots.length === 0`. The BE enforces this server-side too.
+
+---
+
+### 5.3 Business owner personal info (NEW)
+
+`POST /api/v1/sme/kyb/owner-personal`
+
+BE-01 Section A. Captures the four fields the ticket requires. Idempotent — call as many times as you like before submit; each call replaces the prior values.
 
 **Request:**
 ```json
-{ "slot": 0,                              // see KYB slot enum below
-  "fileUrl": "https://...",               // URL to the file you've already put in S3/storage
-  "fileName": "cac-cert.pdf",
-  "contentType": "application/pdf" }
+{
+  "title": "Mr",                       // "Mr" | "Mrs" | "Miss" (string enum)
+  "dateOfBirth": "1990-04-15",         // ISO date (YYYY-MM-DD)
+  "personalStreet": "12 Adeola Odeku St",
+  "personalState": "Lagos",
+  "personalCountry": "Nigeria"         // optional, defaults to Nigeria; rejected if anything else
+}
 ```
 
-**KYB slot enum:**
-| Value | Slot | Purpose |
-|---|---|---|
-| 0 | `CacCertificate` | CAC business-name registration certificate |
-| 1 | `CacStatusReport` | CAC status report |
-| 2 | `ProprietorId` | Driver's licence / NIN slip / passport |
-| 3 | `ProprietorBvn` | **Put the BVN value (11 digits) in `fileUrl`** — we treat this slot as text for now |
-| 4 | `Selfie` | In-app selfie URL (after liveness pass) |
+**Response (`data`):** the full `SmeProfileResponse` (same shape as `GET /sme/profile`), so the FE can re-render the completion checklist without an extra fetch.
+
+**Server-side validation:**
+- `dateOfBirth` must be in the past
+- User must be 18+ (`dateOfBirth ≤ today − 18 years`)
+- `personalCountry`, if supplied, must be `"Nigeria"` (case-insensitive)
+- `title` is a hard enum — bind fails on anything else
 
 **Common failures:**
+- `You must be at least 18 years old.`
+- `Date of birth must be in the past.`
+- `Personal country must be Nigeria.`
+- `KYB is already approved. Owner details can't be changed from here.`
+- `KYB is under review. Wait for the result before editing owner details.`
+
+---
+
+### 5.4 KYB document upload
+
+**Two paths.** Both write to the same DB. The multipart path is preferred for new FE work; the legacy URL-handoff path remains for backward compat.
+
+#### 5.4.a Multipart upload (PREFERRED)
+
+`POST /api/v1/sme/kyb/documents/upload`
+
+Content-Type: `multipart/form-data`. Fields:
+- `file` — the binary. PDF / JPG / PNG only. Hard cap 5 MB (server-side enforced).
+- `slot` — the document slot name (see slot enum below).
+
+Server uploads to a **private** S3 bucket and stores the opaque object key. The bulk `/sme/profile` response will report this row with `isPrivate: true` and an empty `fileUrl`. To view the file, call [§5.5](#55-get-document-url-presigned-new) to mint a fresh short-lived presigned URL.
+
+Idempotent per slot (re-upload replaces; old S3 object is best-effort deleted).
+
+**Common failures:**
+- `Please attach a file.`
+- `File is too large. Max 5 MB.`
+- `File type not allowed. PDF, JPG, or PNG only.`
 - `KYB is already approved. Documents cannot be changed.`
 - `KYB is under review. Wait for the result before re-uploading.`
 
-### `POST /api/v1/sme/kyb/submit`
-Move status from `NotStarted` → `PendingReview`. Refuses if any required slot is missing.
+#### 5.4.b Legacy URL-handoff (still works)
 
-**Common failures:** `Please provide the following before submitting: ProprietorBvn, Selfie.`
+`POST /api/v1/sme/kyb/documents`
+
+For when the FE has already uploaded to S3 elsewhere and just wants to register the URL.
+
+**Request:**
+```json
+{
+  "slot": "CacCertificate",
+  "fileUrl": "https://...",
+  "fileName": "cac-cert.pdf",
+  "contentType": "application/pdf"
+}
+```
+
+Rows from this path land with `isPrivate: false` — the URL is returned verbatim in `/sme/profile.documents[].fileUrl`. No presign needed.
+
+#### Document slot enum
+
+| Slot | Required for submit? | Purpose |
+|---|:---:|---|
+| `CacCertificate` | ✅ | CAC business-name registration certificate (CAC 2) |
+| `CacForm7` | ✅ | CAC Form 7 — Particulars of Directors / Owners |
+| `ProofOfPersonalAddress` | ✅ | Utility bill / bank statement matching `ownerPersonalStreet` |
+| `ProofOfBusinessAddress` | ✅ | Utility bill matching the operating address |
+| `CacStatusReport` |  | CAC status report — accepted but not required |
+| `ProprietorId` |  | Driver's licence / NIN slip / passport — accepted but not required |
+| `ProprietorBvn` |  | BVN value (11 digits) — accepted but not required |
+| `Selfie` |  | In-app selfie URL — accepted but not required |
+
+---
+
+### 5.5 Get document URL (presigned, NEW)
+
+`GET /api/v1/sme/kyb/documents/{slot}/url`
+
+Mints a fresh **15-minute** presigned GET URL for one of the caller's own KYB documents. Use this when the user clicks "View document" — do not cache the URL, just open it.
+
+**Response (`data`):**
+```json
+{
+  "url": "https://riverly-staging-assets.s3.eu-north-1.amazonaws.com/...?X-Amz-Signature=…",
+  "expiresAtUtc": "2026-06-02T07:15:00Z",
+  "slot": "CacCertificate",
+  "fileName": "cac-cert.pdf",
+  "contentType": "application/pdf",
+  "fileSizeBytes": 184320
+}
+```
+
+**Common failures:** `No document found in that slot.`, `Document storage reference is missing.`
+
+For legacy (`isPrivate: false`) rows, the `url` field is the stored public URL unchanged.
+
+---
+
+### 5.6 Submit KYB for review
+
+`POST /api/v1/sme/kyb/submit`
+
+Moves `kybStatus` from `NotStarted` → `PendingReview`. Two server-side gates — the call refuses with a specific message if either is unmet:
+
+1. **Owner personal info complete.** All five `owner*` fields populated. Error: `Please complete the business owner personal details before submitting.`
+2. **All four required documents uploaded.** Error: `Please provide the following before submitting: CacForm7, ProofOfPersonalAddress.`
+
+On success:
+- Status flips to `PendingReview`, `kybSubmittedAt` stamped
+- User gets a push notification: *"We received your business verification…"*
+- User gets a Resend email: *"Your KYB submission is in review"* (sets expectation of 1–2 business days)
+
+---
+
+### 5.7 What ops can do (status transitions)
+
+These are admin endpoints — gated by `X-Admin-Key` header. Not part of the FE flow, but worth knowing because they drive the notifications the user sees.
+
+| Endpoint | What it does | Notification to user |
+|---|---|---|
+| `POST /admin/sme/kyb/{profileId}/approve` | `PendingReview` → `Approved`. Triggers Anchor customer creation + deposit account opening (asynchronously). | Push + email: *"Your business is verified."* |
+| `POST /admin/sme/kyb/{profileId}/reject` body `{ reason, reviewerEmail? }` | `PendingReview` → `Rejected`. | Push + email: *"We couldn't verify {businessName}"* + reason |
+| `POST /admin/sme/kyb/{profileId}/action-required` body `{ reason, reviewerEmail? }` | `PendingReview` or `Approved` → `ActionRequired`. User can re-upload the flagged docs. | Push + email: *"Action needed on your business verification"* + reason |
+| `GET /admin/sme/kyb/{profileId}/documents/{slot}/url` | Mints a 15-min presigned URL for ops to view any KYB document. | (none — read-only) |
+
+**Reviewer identity** is stamped on `SmeProfile.KybReviewerEmail` for every transition. Ops can pass it in the body or via an `X-Admin-Reviewer` header (logging only — not the auth gate).
 
 ---
 
@@ -452,6 +673,12 @@ Initiate an outbound bank transfer.
 - Validation errors: `"Amount must be a positive number."`, `"Minimum transfer is ₦100.00."`, `"Maximum single transfer is ₦5,000,000.00."`
 
 **Narration (PAY-SYS-03):** sanitized on the server — HTML tags, script/style blocks, dangerous URL schemes (`javascript:`, `data:`), and event handlers are stripped before the value is stored or sent to Anchor. Max 300 chars after sanitization.
+
+**KYB guard (BE-01):** The server now blocks transfers when `kybStatus != Approved`. Gate this client-side too — if the dashboard banner is showing, the transfer button should be disabled. Status-aware error copy:
+- `Your business verification is still being reviewed (usually 1–2 business days). You'll be able to send money once it's approved.` — when `PendingReview`
+- `Your business verification wasn't approved. Please log in to see what went wrong and resubmit.` — when `Rejected`
+- `We need a couple more details on your business verification. Please log in to upload the flagged items and resubmit.` — when `ActionRequired`
+- `Please complete your business verification before you can send money. Open the dashboard to start.` — when `NotStarted` or no profile
 
 **Common failures (all friendly):**
 - `Please enter your 4-digit transaction PIN.` (validation)
