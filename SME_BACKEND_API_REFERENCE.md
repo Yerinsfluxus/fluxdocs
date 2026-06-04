@@ -48,6 +48,7 @@
 - [2. Response envelope](#2-response-envelope)
 - [3. HTTP status codes](#3-http-status-codes)
 - [4. Identity endpoints](#4-identity-endpoints)
+  - [Password reset (added 2026-06-04 — covers SME + Corporate + Personal)](#password-reset-added-2026-06-04--covers-sme--corporate--personal)
 - [**5. SME enrollment + KYB (BE-01 — UPDATED)**](#5-sme-enrollment--kyb)
   - [5.1 Single-shot enrollment (NEW)](#51-single-shot-enrollment-new)
   - [5.2 KYB status + dashboard banner](#52-kyb-status--dashboard-banner)
@@ -316,6 +317,75 @@ Used by Settings → "Your other Riverly products". Returns the identity profile
 
 ---
 
+### Password reset (added 2026-06-04 — covers SME + Corporate + Personal)
+
+Three-step flow that lives under `/identity/*` so SME and Corporate users (whose credential is `Identity.PasswordHash`, not the legacy Personal `users.Passcode`) can recover access. **OTP is always delivered to the email on file** — SMS is not used here because users travelling abroad lose carrier signal.
+
+These endpoints are anonymous (no JWT required).
+
+#### `POST /api/v1/identity/passcode/forgot`
+Start the reset.
+
+**Request:** `{ "identifier": "jane@example.com" }`  // email OR phone
+
+**Response:** always 200 OK with a generic message, regardless of whether the identifier matched — prevents user enumeration.
+```json
+{
+  "status": true,
+  "message": "If an account exists with this identifier, a reset code has been sent.",
+  "data": { "sent": true, "resendCooldownSeconds": 60, "debugOtpCode": null }
+}
+```
+`debugOtpCode` is populated only on Staging/Development so QA can complete the flow without an inbox round-trip. Always `null` in Production.
+
+#### `POST /api/v1/identity/passcode/verify-otp`
+Exchange the OTP for a short-lived (10-minute) reset token.
+
+**Request:**
+```json
+{
+  "identifier": "jane@example.com",
+  "otpCode":    "123456"
+}
+```
+
+**Response:**
+```json
+{
+  "status": true,
+  "message": "OTP verified. Please set your new passcode within 10 minutes.",
+  "data": {
+    "resetToken": "<opaque base64>",
+    "productType": "Sme"               // tells FE which credential format to collect next
+  }
+}
+```
+
+**Use `productType` to render the right input on the next screen:**
+- `Personal` → 6-digit numeric keypad
+- `Sme` / `Corporate` → password field with 8+ char complexity rules
+
+#### `POST /api/v1/identity/passcode/reset`
+Finalise the reset.
+
+**Request:**
+```json
+{
+  "identifier":      "jane@example.com",
+  "resetToken":      "<from verify-otp>",
+  "newPasscode":     "Str0ng!Pass",
+  "confirmPasscode": "Str0ng!Pass"
+}
+```
+
+Server validates `newPasscode` against the identity's product:
+- **Personal:** exactly 6 numeric digits
+- **SME / Corporate:** 8+ chars with at least one uppercase, lowercase, digit, and special character
+
+**Response:** `{ "status": true, "message": "Your passcode has been reset...", "data": null }`. After this the user can log in via `/identity/login` with the new credential.
+
+---
+
 ## 5. SME enrollment + KYB
 
 Two ways to enroll a new SME identity into the Riverly SME product:
@@ -409,7 +479,23 @@ Collapses BE-106 (business info) + BE-109 (password) into one call. Owner role +
       "fileSizeBytes": 184320
     }
   ],
-  "missingRequiredSlots": ["CacForm7", "ProofOfPersonalAddress"]   // empty when all four uploaded
+  "missingRequiredSlots": ["CacForm7", "ProofOfPersonalAddress"],   // empty when all four uploaded
+
+  // ── Identity fields (mirrors /identity/me — added 2026-06-04) ──
+  // Lets the FE render profile/settings without a second call. Identity
+  // is eager-loaded server-side so these come for free.
+  "firstName":     "Jane",
+  "surname":       "Doe",
+  "fullName":      "Jane Doe",
+  "email":         "jane@example.com",
+  "phoneNumber":   "+2348101234567",
+  "emailVerified": true,
+  "phoneVerified": true,
+
+  // True when the identity has a transaction PIN on file (added 2026-06-04).
+  // Use it to decide between routing to /sme/transaction-pin/set vs /verify
+  // on the first money-movement attempt.
+  "transactionPinSet": false
 }
 ```
 
@@ -882,3 +968,5 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 |---|---|---|
 | 2026-05-26 | Initial document covering identity, SME enroll, KYB, account, transfers, PIN, beneficiaries, receipts, webhooks | 1–4 |
 | 2026-05-26 | Slice 5 added: PDF receipt download, identity/business profile edits, notification preferences, push device registration, support/report-issue tickets | 5 |
+| 2026-06-04 | Password reset trio added under `/identity/passcode/{forgot,verify-otp,reset}` — works for SME + Corporate + Personal; OTP always delivered to email. See [§4 Password reset](#password-reset-added-2026-06-04--covers-sme--corporate--personal). | — |
+| 2026-06-04 | `GET /sme/profile` now returns identity fields (`firstName`, `surname`, `fullName`, `email`, `phoneNumber`, `emailVerified`, `phoneVerified`) plus `transactionPinSet`. No more double-call to `/identity/me` for profile/settings screens. See [§5.2](#52-kyb-status--dashboard-banner). | — |
