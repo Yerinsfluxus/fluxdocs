@@ -384,6 +384,26 @@ Server validates `newPasscode` against the identity's product:
 
 **Response:** `{ "status": true, "message": "Your passcode has been reset...", "data": null }`. After this the user can log in via `/identity/login` with the new credential.
 
+#### `POST /api/v1/identity/passcode/change`
+**Authenticated.** For Settings → Change password: the user supplies their current credential, no OTP. Works for any product.
+
+**Request:**
+```json
+{
+  "currentPasscode": "Str0ng!Pass",
+  "newPasscode":     "Even5tr0nger!",
+  "confirmPasscode": "Even5tr0nger!"
+}
+```
+
+Server validates:
+- Current passcode matches the identity's stored hash (otherwise: "Your current passcode is incorrect.")
+- New and confirm match
+- New passcode satisfies the product's format rule (Personal: 6 digits; SME/Corporate: 8+ chars with upper/lower/digit/special)
+- New passcode is **different** from the current one ("New passcode must be different from your current passcode.")
+
+**Response:** `{ "status": true, "message": "Your passcode has been updated.", "data": null }`.
+
 ---
 
 ## 5. SME enrollment + KYB
@@ -970,3 +990,4 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 | 2026-05-26 | Slice 5 added: PDF receipt download, identity/business profile edits, notification preferences, push device registration, support/report-issue tickets | 5 |
 | 2026-06-04 | Password reset trio added under `/identity/passcode/{forgot,verify-otp,reset}` — works for SME + Corporate + Personal; OTP always delivered to email. See [§4 Password reset](#password-reset-added-2026-06-04--covers-sme--corporate--personal). | — |
 | 2026-06-04 | `GET /sme/profile` now returns identity fields (`firstName`, `surname`, `fullName`, `email`, `phoneNumber`, `emailVerified`, `phoneVerified`) plus `transactionPinSet`. No more double-call to `/identity/me` for profile/settings screens. See [§5.2](#52-kyb-status--dashboard-banner). | — |
+| 2026-06-04 | `POST /identity/passcode/change` added — authenticated Settings → Change password. Same product-aware validation as set/reset. See [§4](#post-apiv1identitypasscodechange). | — |
