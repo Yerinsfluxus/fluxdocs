@@ -1023,3 +1023,4 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 | 2026-06-04 | `POST /identity/passcode/change` added — authenticated Settings → Change password. Same product-aware validation as set/reset. See [§4](#post-apiv1identitypasscodechange). | — |
 | 2026-06-05 | `POST /sme/account/test-fund` added — STAGING ONLY. FE can self-serve test funds without pinging BE. See [§6](#post-apiv1smeaccounttest-fund-staging-only). | — |
 | 2026-06-05 | New SME deposit-account responses now return the unmasked NUBAN + real bank name (Anchor masks the DepositAccount payload; we read the linked VirtualNuban instead). Existing rows still show the masked value until backfilled. | — |
+| 2026-06-05 | Admin endpoint `POST /admin/sme/profile/{id}/refresh-account` added — re-syncs an SME profile's stored account number + bank name against Anchor's current view. Idempotent. Used for backfilling pre-fix rows. | — |
