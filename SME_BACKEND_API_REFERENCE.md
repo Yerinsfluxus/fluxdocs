@@ -700,6 +700,36 @@ Returns the local account record (one per profile). Available only after KYB is 
 ### `GET /api/v1/sme/account/balance`
 Triggers a live refresh from Anchor, updates the local cache, and returns the same shape as `/sme/account`.
 
+### `POST /api/v1/sme/account/test-fund` (staging only)
+
+**Staging / Development only — refused with 400 in Production.** Simulates an incoming bank transfer into the caller's own SME account. Useful for FE devs to trigger the "money landed" UX (push, balance auto-refresh, transaction list update) without waiting for a real settlement or asking BE to fund manually each time.
+
+**Request:**
+```json
+{ "amount": 50000 }   // naira, between 100 and 10,000,000
+```
+
+**Response:**
+```json
+{
+  "status": true,
+  "message": "Test funds simulated.",
+  "data": {
+    "amount": 50000,
+    "currency": "NGN",
+    "paymentReference": "<anchor payment id>",
+    "message": "Test funds simulated. Refresh balance/transactions to see the credit."
+  }
+}
+```
+
+After this returns, call `GET /sme/account/balance` and `GET /sme/transactions` to see the credit reflected. There's a brief Anchor processing window — usually < 5 seconds.
+
+**Failure modes:**
+- `Not available in production.` → you're hitting prod; nothing to do.
+- `Your account isn't provisioned yet. Wait for KYB approval before funding.` → user hasn't completed KYB.
+- `Test funding failed: <reason>` → Anchor rejected the simulate-transfer (usually master account out of balance — ping BE).
+
 ### `GET /api/v1/sme/transactions?limit=50`
 Latest first. `limit` clamped to 1–200.
 
@@ -991,3 +1021,5 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 | 2026-06-04 | Password reset trio added under `/identity/passcode/{forgot,verify-otp,reset}` — works for SME + Corporate + Personal; OTP always delivered to email. See [§4 Password reset](#password-reset-added-2026-06-04--covers-sme--corporate--personal). | — |
 | 2026-06-04 | `GET /sme/profile` now returns identity fields (`firstName`, `surname`, `fullName`, `email`, `phoneNumber`, `emailVerified`, `phoneVerified`) plus `transactionPinSet`. No more double-call to `/identity/me` for profile/settings screens. See [§5.2](#52-kyb-status--dashboard-banner). | — |
 | 2026-06-04 | `POST /identity/passcode/change` added — authenticated Settings → Change password. Same product-aware validation as set/reset. See [§4](#post-apiv1identitypasscodechange). | — |
+| 2026-06-05 | `POST /sme/account/test-fund` added — STAGING ONLY. FE can self-serve test funds without pinging BE. See [§6](#post-apiv1smeaccounttest-fund-staging-only). | — |
+| 2026-06-05 | New SME deposit-account responses now return the unmasked NUBAN + real bank name (Anchor masks the DepositAccount payload; we read the linked VirtualNuban instead). Existing rows still show the masked value until backfilled. | — |
