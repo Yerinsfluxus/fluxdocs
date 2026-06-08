@@ -16,7 +16,7 @@
 > 8. **Staging-only `debugOtpCode` in OTP responses.** Email-OTP-firing endpoints (`/identity/signup`, `/email/resend`, `/email/add`, `/phone/skip`, `/phone/verify`-success) return `data.debugOtpCode` on non-prod hosts. Lets you test against fake email addresses. Always `null` in production.
 >
 > **What changed since 2026-05-26 (older — still applies):**
-> 9. **Phone SMS via Sendchamp.** Phone OTP is now 5 digits (was logged-only); delivered by Sendchamp from sender `SC-OTP` the moment the wallet is funded.
+> 9. **Phone OTP via Sendchamp.** All three products (Personal / SME / Corporate) now dispatch **6-digit** phone OTP via Sendchamp. Default delivery channel on staging is **WhatsApp** (auto-fallback to SMS once the branded sender ID is approved with the carriers). Phone OTP and email OTP are both 6 digits.
 > 10. **OTPs are SEQUENTIAL.** Phone fires at signup; email fires automatically when phone is verified or skipped. Avoids the 10-min TTL expiry race.
 > 11. **Transfer flow has stricter validation, a PIN attempt counter, and a 10-min pending expiry.** See [§7](#7-banks-name-enquiry-external-transfer) and [§8](#8-transaction-pin).
 > 12. **Beneficiaries: name-lookup is required before save**, saved name is bank-verified. Server-side recipient search via `?search=`. See [§9](#9-beneficiaries).
@@ -29,7 +29,7 @@
 > **Provider status:**
 > - **Email (Resend) — LIVE.** Real OTP + welcome emails ship from `noreply@mail.riverly.ng`. No code workaround needed any more.
 > - **Push (Firebase Cloud Messaging) — LIVE.** Register a device token via `POST /api/v1/sme/push/devices` and you'll start receiving pushes on `deposit`, `transfer`, and `kyb` events.
-> - **SMS (Sendchamp) — INTEGRATED, AWAITING WALLET.** Phone OTP code generation, send, and verify are all wired through Sendchamp's `/verification/create` + `/verification/confirm`. Real SMS will deliver as soon as the Sendchamp wallet is funded; until then the API call fails-soft (signup still completes, email OTP still works, but no SMS reaches the phone). Once funded: no FE change required.
+> - **Phone OTP (Sendchamp) — LIVE on WhatsApp; SMS pending sender-ID approval.** Phone OTP is wired through Sendchamp's `/verification/create` + `/verification/confirm`. On staging the channel is `whatsapp` — codes are delivered to the user's WhatsApp from Sendchamp's business account (no FE change needed). Once the branded SMS sender ID is approved with the carriers, channel will flip to `auto` (SMS first, WhatsApp fallback). All three products dispatch **6-digit** codes.
 
 ---
 
@@ -108,7 +108,7 @@ Response `data` includes `accessToken` (identity, 7-day), plus `emailVerified`, 
 
 Validation rules:
 - **Email OTP** (Riverly's `OtpService`): 6 digits, 10-min expiry, 5 attempts per OTP, 3 resends per 10 minutes. Delivered for real via Resend.
-- **Phone OTP** (Sendchamp's `/verification/*` endpoints): 5 digits, 10-min expiry, attempt + resend limits enforced by Sendchamp. Sender ID `SC-OTP`. Delivered via SMS the moment the Sendchamp wallet has balance; if the wallet is empty the API call fails-soft and the user can still complete signup on the email channel.
+- **Phone OTP** (Sendchamp's `/verification/*` endpoints): **6 digits** across all three products, 10-min expiry, attempt + resend limits enforced by Sendchamp. Staging dispatches via WhatsApp by default (will switch to SMS-primary once the branded sender ID is approved). FE need only collect 6 digits and pass through — server handles dispatch + verify.
 
 Resend cooldown returns `60` (seconds) so the FE can show a countdown.
 
@@ -1024,3 +1024,6 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 | 2026-06-05 | `POST /sme/account/test-fund` added — STAGING ONLY. FE can self-serve test funds without pinging BE. See [§6](#post-apiv1smeaccounttest-fund-staging-only). | — |
 | 2026-06-05 | New SME deposit-account responses now return the unmasked NUBAN + real bank name (Anchor masks the DepositAccount payload; we read the linked VirtualNuban instead). Existing rows still show the masked value until backfilled. | — |
 | 2026-06-05 | Admin endpoint `POST /admin/sme/profile/{id}/refresh-account` added — re-syncs an SME profile's stored account number + bank name against Anchor's current view. Idempotent. Used for backfilling pre-fix rows. | — |
+| 2026-06-08 | **Phone OTP standardised at 6 digits across Personal / SME / Corporate.** Earlier 5-digit SME variant retired. Verify DTOs accept exactly 6 digits. SME mobile builds collecting 5 digits need to update their UI to 6 before next test cycle. | — |
+| 2026-06-08 | Sendchamp delivery channel now configurable (`sms`, `whatsapp`, `auto`). Staging default is `whatsapp` — OTP is delivered to the user's WhatsApp via Sendchamp's business account; no FE change needed. Will flip to `auto` (SMS-primary, WhatsApp fallback) once branded SMS sender ID is approved. | — |
+| 2026-06-08 | Legacy `/personal/onboarding/phone/initiate` + `/verify` rewired to use the same Sendchamp pipeline as `/identity/*` — dispatches real OTPs (previously commented out) and verifies correctly (previous inverted check fixed). No FE change required; the Personal mobile app keeps working without a new build. | — |
