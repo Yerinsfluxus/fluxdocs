@@ -80,7 +80,7 @@ The SME app walks a new user through 7 screens. Each step has a dedicated endpoi
 | 2. Phone OTP | BE-103 | `POST /api/v1/identity/phone/verify` | identity | Skip allowed → `POST /api/v1/identity/phone/skip`. Resend → `POST /api/v1/identity/phone/resend` |
 | 3. Email OTP | BE-104 | `POST /api/v1/identity/email/verify` | identity | **No skip.** Resend → `POST /api/v1/identity/email/resend`. Error copy masks the email |
 | 4. Business profile | BE-106 | `POST /api/v1/sme/onboarding/business-profile` | identity | Picks industry from `/api/v1/reference/industries` (BE-105). Logo upload is a separate call: `POST /api/v1/sme/onboarding/logo` (multipart) |
-| 5. Owner role | BE-107 | `POST /api/v1/sme/onboarding/owner-role` | identity | role must be `"Business Owner"`; ownership 1–100; **`bvn` required (11 digits)** |
+| 5. Owner role | BE-107 | `POST /api/v1/sme/onboarding/owner-role` | identity | role must be `"Business Owner"`; ownership 1–100; **`bvn` required (10 or 11 digits)** |
 | 6. Address | BE-108 | `POST /api/v1/sme/onboarding/address` | identity | When `isRegisteredAddressSameAsOperating=false` the registered_* fields become required. State picker uses `/api/v1/reference/states` |
 | 7. Password | BE-109 | `POST /api/v1/sme/onboarding/password` | identity | Server enforces 8+ chars / upper / lower / digit / special. Sets `onboardingCompletedAt`. **Now eligible to call `/api/v1/identity/switch-product` and land on the dashboard.** |
 
@@ -166,7 +166,7 @@ After this returns, the FE flow is the same as SME: `POST /identity/email/verify
 }
 ```
 
-`bvn` is required (exactly 11 digits) since Femi + Eugene's flow update.
+`bvn` is required (10 or 11 digits) since Femi + Eugene's flow update.
 It's persisted privately on the profile and is what Anchor reads at KYB
 approve time — never returned in any `/sme/profile` response.
 
