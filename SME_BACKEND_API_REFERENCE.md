@@ -80,7 +80,7 @@ The SME app walks a new user through 7 screens. Each step has a dedicated endpoi
 | 2. Phone OTP | BE-103 | `POST /api/v1/identity/phone/verify` | identity | Skip allowed → `POST /api/v1/identity/phone/skip`. Resend → `POST /api/v1/identity/phone/resend` |
 | 3. Email OTP | BE-104 | `POST /api/v1/identity/email/verify` | identity | **No skip.** Resend → `POST /api/v1/identity/email/resend`. Error copy masks the email |
 | 4. Business profile | BE-106 | `POST /api/v1/sme/onboarding/business-profile` | identity | Picks industry from `/api/v1/reference/industries` (BE-105). Logo upload is a separate call: `POST /api/v1/sme/onboarding/logo` (multipart) |
-| 5. Owner role | BE-107 | `POST /api/v1/sme/onboarding/owner-role` | identity | role must be `"Business Owner"`; ownership 1–100 |
+| 5. Owner role | BE-107 | `POST /api/v1/sme/onboarding/owner-role` | identity | role must be `"Business Owner"`; ownership 1–100; **`bvn` required (11 digits)** |
 | 6. Address | BE-108 | `POST /api/v1/sme/onboarding/address` | identity | When `isRegisteredAddressSameAsOperating=false` the registered_* fields become required. State picker uses `/api/v1/reference/states` |
 | 7. Password | BE-109 | `POST /api/v1/sme/onboarding/password` | identity | Server enforces 8+ chars / upper / lower / digit / special. Sets `onboardingCompletedAt`. **Now eligible to call `/api/v1/identity/switch-product` and land on the dashboard.** |
 
@@ -159,8 +159,16 @@ After this returns, the FE flow is the same as SME: `POST /identity/email/verify
 ### Owner role (BE-107)
 
 ```json
-{ "role": "Business Owner", "ownershipPercentage": 100 }
+{
+  "role": "Business Owner",
+  "ownershipPercentage": 100,
+  "bvn": "12345678901"
+}
 ```
+
+`bvn` is required (exactly 11 digits) since Femi + Eugene's flow update.
+It's persisted privately on the profile and is what Anchor reads at KYB
+approve time — never returned in any `/sme/profile` response.
 
 ### Address (BE-108)
 
@@ -1027,3 +1035,4 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 | 2026-06-08 | Phone OTP length kept product-dependent for now: **SME = 5 digits**, **Personal / Corporate = 6 digits**. Verify DTOs accept 4-8 digits so both pass schema validation. The SME 5-digit variant protects the shipped APK; will standardise on 6 across all products when the next SME mobile build is released. | — |
 | 2026-06-08 | Sendchamp delivery channel now configurable (`sms`, `whatsapp`, `auto`). Staging default is `whatsapp` — OTP is delivered to the user's WhatsApp via Sendchamp's business account; no FE change needed. Will flip to `auto` (SMS-primary, WhatsApp fallback) once branded SMS sender ID is approved. | — |
 | 2026-06-08 | Legacy `/personal/onboarding/phone/initiate` + `/verify` rewired to use the same Sendchamp pipeline as `/identity/*` — dispatches real OTPs (previously commented out) and verifies correctly (previous inverted check fixed). No FE change required; the Personal mobile app keeps working without a new build. | — |
+| 2026-06-15 | `POST /sme/onboarding/owner-role` now takes a required `bvn` (11 digits) — added after Femi + Eugene updated the flow. Stored privately on the profile; consumed by Anchor at KYB approve time. Admin approve still accepts a `bvn` override for legacy profiles. | — |
