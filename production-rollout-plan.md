@@ -1,19 +1,6 @@
 # Production Rollout Plan
 
-**Status:** Proposal — pending review (revised after first review)
-**Owner:** Yerins
-**Last updated:** 2026-06-24
 
-## Revision history
-
-- **2026-06-24 (initial):** First draft.
-- **2026-06-24 (rev1):** Incorporated review feedback. Key changes: §2 acknowledges `api.riverly.ng` is currently serving staging and adds an explicit cutover step; §5 elevated to **hard blocker** with the test-fund endpoint confirmed unguarded; §6 notes the existing ECS container is named `riverly_staging_container` and must be renamed; §7 adds a backup/snapshot gate before the first prod migration; §8 corrects webhook paths to `/api/v1/webhooks/anchor` and `/api/v1/webhooks/providus`; §4/§8 normalizes "XpressWallet" terminology to the actual config namespace `Providus:*`; §10 adds a §10.0 domain-cutover step that runs before any prod infra is provisioned.
-
-This document proposes how we stand up a production environment for the Riverly API alongside the existing staging environment, now that XpressWallet's live API is ready and Anchor's production access is on the horizon.
-
-The goals: clean separation between staging and production, no accidental cross-talk, no manual rituals to "remember which is which", and a deploy story that makes prod releases boring rather than scary.
-
----
 
 ## TL;DR
 
