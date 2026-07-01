@@ -3,9 +3,16 @@
 **Status:** Living document. Updated every time a new endpoint ships.
 **Audience:** Frontend / mobile engineers building the SME app.
 **Base URL (staging):** `https://api.riverly.ng`
-**Last refreshed:** 2026-06-02 — BE-01 (in-app KYB) shipped end to end. Three phases live on staging: transaction guard + status emails + reviewer tracking (Phase 1), owner-personal data + new doc slots (Phase 2), private S3 + multipart upload + presigned URLs (Phase 3).
+**Last refreshed:** 2026-07-01 — identity path expanded with device-header handling, refresh token endpoint, and a Personal-specific fine-grained step field. See changelog immediately below.
 
-> **What changed since 2026-05-29 (read this section if you've been building against the old doc):**
+> **What changed since 2026-06-02 (read this section if you've been building against the old doc):**
+> 1. **`POST /api/v1/identity/refresh`** — NEW. Rotates a refresh token for a fresh identity access + refresh pair. Anonymous. Body: `{ "refreshToken": "…" }`. Replaces having to re-login when the identity token expires mid-flow. See [§4](#4-identity-endpoints).
+> 2. **Device headers now required on `/identity/login`.** `X-Device-Id`, `X-Device-Name`, `X-Device-Type`, `X-Device-Os` must be sent. The BE registers the device against the SME identity so activity-logging and future device-scoped features work. Missing headers → 400.
+> 3. **`/identity/signup` payload changed** — now takes `firstName`, `surname`, `phoneNumber`, `email`, `productType`, and optional `referralCode`. The old `fullName` + `password` shape stopped working. See [§4](#4-identity-endpoints).
+> 4. **`IdentityAuthResponse.personalNextStep`** — new field on every identity response. **Ignore this for SME** — it's only populated for Personal identities. SME reads `nextStep` as before.
+> 5. **`deviceVerificationRequired`** on identity auth responses — **also Personal-only**. SME never triggers it.
+>
+> **What changed since 2026-05-29 (earlier, still applies):**
 > 1. **KYB Phase 2 (post-signup) is now fully spec-aligned.** New endpoint `POST /sme/kyb/owner-personal` captures the business owner's title, DOB, and personal address. Required document set is now `CacCertificate` + `CacForm7` + `ProofOfPersonalAddress` + `ProofOfBusinessAddress`. The old slots (CacStatusReport, ProprietorId, ProprietorBvn, Selfie) still upload but no longer gate submission. See [§5](#5-sme-enrollment--kyb).
 > 2. **Status enum gained `ActionRequired`.** Five states now: `NotStarted, PendingReview, Approved, Rejected, ActionRequired`. Ops can flag a submission for follow-up instead of outright rejecting it. The user re-uploads, resubmits, status flows back to PendingReview. See [§5.2](#52-kyb-status--dashboard-banner).
 > 3. **Document upload now has two paths.** Legacy URL-handoff (`POST /sme/kyb/documents`) still works. **Prefer the new multipart path** (`POST /sme/kyb/documents/upload`) — it streams the file through the BE, server-validates mime + size (PDF / JPG / PNG ≤ 5 MB), and lands the file in a private S3 bucket. See [§5.4](#54-kyb-document-upload).
@@ -48,6 +55,7 @@
 - [2. Response envelope](#2-response-envelope)
 - [3. HTTP status codes](#3-http-status-codes)
 - [4. Identity endpoints](#4-identity-endpoints)
+  - [Refresh token (added 2026-07-01)](#post-apiv1identityrefresh)
   - [Password reset (added 2026-06-04 — covers SME + Corporate + Personal)](#password-reset-added-2026-06-04--covers-sme--corporate--personal)
 - [**5. SME enrollment + KYB (BE-01 — UPDATED)**](#5-sme-enrollment--kyb)
   - [5.1 Single-shot enrollment (NEW)](#51-single-shot-enrollment-new)
@@ -90,10 +98,11 @@ KYB documents (CAC certificate, status report, ID, BVN, selfie) are uploaded **a
 
 ```json
 {
-  "firstName": "Jane",
-  "surname":   "Doe",
+  "firstName":   "Jane",
+  "surname":     "Doe",
   "phoneNumber": "+2348012345678",   // accepts +234XXXXXXXXXX or 0XXXXXXXXXX
-  "email":     "jane@example.com"
+  "email":       "jane@example.com",
+  "productType": 1                   // 1 = Sme — required
 }
 ```
 
@@ -227,6 +236,14 @@ There is **no product picker UI** in the SME app — it always asks for `product
 **Headers:**
 - All authenticated calls: `Authorization: Bearer <token>`
 - All JSON requests: `Content-Type: application/json`
+- **Device headers on `/identity/login`** (as of 2026-07-01):
+  ```
+  X-Device-Id:   <stable device fingerprint>          ← required
+  X-Device-Name: "Jane's iPhone"                      ← optional
+  X-Device-Type: "ios" | "android" | "web"            ← required
+  X-Device-Os:   "iOS 17.1"                           ← optional
+  ```
+  Missing `X-Device-Id` on login → HTTP 400. Send these on signup too so the initial enrollment device is recorded.
 
 ---
 
@@ -280,31 +297,45 @@ All `message` and `errors` values are **safe to display verbatim** to end users.
 ## 4. Identity endpoints
 
 ### `POST /api/v1/identity/signup`
-Create a brand-new Riverly identity.
+Create a brand-new Riverly identity. Password is set later via `/identity/passcode/set` or via `/identity/products/sme/enroll`.
 
 **Request:**
 ```json
-{ "fullName": "Jane Doe",
-  "email": "jane@example.com",
+{
+  "firstName":   "Jane",
+  "surname":     "Doe",
   "phoneNumber": "+2348100000000",
-  "password": "MyStrongPass1!" }
+  "email":       "jane@example.com",
+  "productType": 1               // 1 = Sme (0 = Personal, 2 = Corporate)
+}
 ```
 
-**Success (`status: true`):** returns `data.accessToken` (identity token).
+`referralCode` is an optional field, Personal-only. SME can omit it.
+
+**Success (`status: true`):** returns `data.accessToken` (identity token) + `nextStep` (`"VerifyPhone"` for SME after signup).
 
 **Common failures:**
 - `An account with this email already exists. Please log in instead.`
 - `An account with this phone number already exists. Please log in instead.`
-- Validation: missing fullName/email/phone/password, password too short, bad email format.
+- Validation: missing firstName/surname/phoneNumber/email, bad email format.
 
 ### `POST /api/v1/identity/login`
-Sign in.
+Sign in. **Device headers required** — see [Global conventions](#global-conventions).
 
 **Request:** `{ "identifier": "<email or phone>", "password": "..." }`
 
 **Success:** returns identity token + `availableProducts` array (used by Settings → "Your other Riverly products"). `defaultProduct` set if user has only one.
 
-**Common failures:** `Invalid credentials.`, `Your account is suspended.`, `Your account is temporarily locked.`
+**Common failures:** `Invalid credentials.`, `Your account is suspended.`, `Your account is temporarily locked.`, missing device headers → 400.
+
+### `POST /api/v1/identity/refresh`
+Rotate a refresh token when the identity access token is close to expiring. Anonymous.
+
+**Request:** `{ "refreshToken": "<current refresh token>" }`
+
+**Success:** returns a fresh `{ accessToken, refreshToken, identityId }`. The client swaps its stored tokens; the old refresh token is revoked.
+
+**Common failures:** `Invalid or expired refresh token.` — user must log in again.
 
 ### `POST /api/v1/identity/switch-product`
 Exchange identity token for a product-scoped token. **The SME app always sends `productType: 1` (SME)** — no user input.
@@ -319,7 +350,7 @@ Exchange identity token for a product-scoped token. **The SME app always sends `
 Used by Settings → "Your other Riverly products". Returns the identity profile + all memberships across products. Use the membership list to render which other Riverly apps the user has access to.
 
 ### `POST /api/v1/identity/logout`
-**Request:** `{ "refreshToken": "<the refresh token stored when switch-product returned>" }`
+**Request:** `{ "refreshToken": "<the refresh token stored when switch-product returned>" }` (body may be omitted; the endpoint is idempotent).
 
 **Success:** revokes the refresh token. Client should clear both tokens locally and route to sign-in.
 
