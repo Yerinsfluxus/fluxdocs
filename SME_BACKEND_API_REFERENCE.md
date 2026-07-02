@@ -3,8 +3,13 @@
 **Status:** Living document. Updated every time a new endpoint ships.
 **Audience:** Frontend / mobile engineers building the SME app.
 **Base URL (staging):** `https://api.riverly.ng`
-**Last refreshed:** 2026-07-01 — identity path expanded with device-header handling, refresh token endpoint, and a Personal-specific fine-grained step field. See changelog immediately below.
+**Canonical copy:** <https://github.com/Yerinsfluxus/fluxdocs/blob/main/SME_BACKEND_API_REFERENCE.md> — this file is published there on push; always read the GitHub copy for the latest.
+**Last refreshed:** 2026-07-02 — SME test-fund rewired to credit the local ledger directly (no longer depends on the Anchor sandbox); same test-fund now exists for Personal + Corporate. See changelog immediately below. (2026-07-01: identity path expanded with device-header handling, refresh token endpoint, and a Personal-specific fine-grained step field.)
 
+> **What changed since 2026-07-02 (newest — read this first):**
+> 1. **`POST /sme/account/test-fund` now credits the local ledger directly — no Anchor call.** Behaviour for the FE is the same (call it, refresh, see the money), but it's now **immediate/synchronous** (no processing-window wait) and **works even when the Anchor sandbox is down/blocked**. `data.paymentReference` is now a local `SME-TEST-…` reference, not an Anchor payment id. The `Test funding failed: …` failure mode is gone. Production gate is `403`. See [§6](#post-apiv1smeaccounttest-fund-staging-only).
+> 2. **Same test-fund now exists on the other apps:** `POST /api/v1/personal/accounts/test-fund` and `POST /api/v1/corporate/accounts/test-fund` — identical `{ "amount" }` body, same staging-only gate. Only relevant if you also build the Personal/Corporate money-landed screens.
+>
 > **What changed since 2026-06-02 (read this section if you've been building against the old doc):**
 > 1. **`POST /api/v1/identity/refresh`** — NEW. Rotates a refresh token for a fresh identity access + refresh pair. Anonymous. Body: `{ "refreshToken": "…" }`. Replaces having to re-login when the identity token expires mid-flow. See [§4](#4-identity-endpoints).
 > 2. **Device headers now required on `/identity/login`.** `X-Device-Id`, `X-Device-Name`, `X-Device-Type`, `X-Device-Os` must be sent. The BE registers the device against the SME identity so activity-logging and future device-scoped features work. Missing headers → 400.
@@ -741,7 +746,9 @@ Triggers a live refresh from Anchor, updates the local cache, and returns the sa
 
 ### `POST /api/v1/sme/account/test-fund` (staging only)
 
-**Staging / Development only — refused with 400 in Production.** Simulates an incoming bank transfer into the caller's own SME account. Useful for FE devs to trigger the "money landed" UX (push, balance auto-refresh, transaction list update) without waiting for a real settlement or asking BE to fund manually each time.
+**Staging / Development only — refused with `403` in Production.** Credits the caller's own SME account **directly on Riverly's local ledger** (writes a `Completed` `Credit` transaction + bumps the balance). No Anchor call is made. Lets FE devs trigger the "money landed" UX (balance auto-refresh, transaction list update) on demand, without waiting for a real settlement — and, unlike before, it **keeps working even when the Anchor sandbox is down or blocked**.
+
+> **Changed 2026-07-02:** this used to route through Anchor's simulate-transfer rail. It now credits the local ledger directly, so it's immediate and provider-independent. `paymentReference` is now a local reference, not an Anchor payment id.
 
 **Request:**
 ```json
@@ -752,22 +759,23 @@ Triggers a live refresh from Anchor, updates the local cache, and returns the sa
 ```json
 {
   "status": true,
-  "message": "Test funds simulated.",
+  "message": "Test funds credited.",
   "data": {
     "amount": 50000,
     "currency": "NGN",
-    "paymentReference": "<anchor payment id>",
-    "message": "Test funds simulated. Refresh balance/transactions to see the credit."
+    "paymentReference": "SME-TEST-XXXXXXXXXXXXXXX",   // local ledger reference
+    "message": "Test funds credited. Refresh balance/transactions to see the credit."
   }
 }
 ```
 
-After this returns, call `GET /sme/account/balance` and `GET /sme/transactions` to see the credit reflected. There's a brief Anchor processing window — usually < 5 seconds.
+The credit is **immediate and synchronous** — the moment this returns, `GET /sme/account` shows the new `availableBalance` / `ledgerBalance` and `GET /sme/transactions` shows a fresh `Completed` `Credit` row (`type: "Deposit"`, `counterpartyName: "Riverly Test Funding"`). No processing-window wait.
 
 **Failure modes:**
 - `Not available in production.` → you're hitting prod; nothing to do.
-- `Your account isn't provisioned yet. Wait for KYB approval before funding.` → user hasn't completed KYB.
-- `Test funding failed: <reason>` → Anchor rejected the simulate-transfer (usually master account out of balance — ping BE).
+- `Your account isn't provisioned yet. Wait for KYB approval before funding.` → the SME account row doesn't exist yet (KYB not approved).
+
+> **Cross-product:** the identical endpoint now exists for the other apps — `POST /api/v1/personal/accounts/test-fund` and `POST /api/v1/corporate/accounts/test-fund` (same `{ "amount" }` body, same staging-only `403`-in-prod gate). Corporate accepts an optional `accountId` to target a specific org account (defaults to the first active one).
 
 ### `GET /api/v1/sme/transactions?limit=50`
 Latest first. `limit` clamped to 1–200.
@@ -1067,3 +1075,5 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 | 2026-06-08 | Sendchamp delivery channel now configurable (`sms`, `whatsapp`, `auto`). Staging default is `whatsapp` — OTP is delivered to the user's WhatsApp via Sendchamp's business account; no FE change needed. Will flip to `auto` (SMS-primary, WhatsApp fallback) once branded SMS sender ID is approved. | — |
 | 2026-06-08 | Legacy `/personal/onboarding/phone/initiate` + `/verify` rewired to use the same Sendchamp pipeline as `/identity/*` — dispatches real OTPs (previously commented out) and verifies correctly (previous inverted check fixed). No FE change required; the Personal mobile app keeps working without a new build. | — |
 | 2026-06-15 | `POST /sme/onboarding/owner-role` now takes a required `bvn` (11 digits) — added after Femi + Eugene updated the flow. Stored privately on the profile; consumed by Anchor at KYB approve time. Admin approve still accepts a `bvn` override for legacy profiles. | — |
+| 2026-07-02 | `POST /sme/account/test-fund` rewired to credit the local ledger directly instead of Anchor's simulate-transfer rail — now immediate, provider-independent, and works while the Anchor sandbox is down. `paymentReference` is now a local `SME-TEST-…` ref; the `Test funding failed` mode is gone; prod gate is `403`. See [§6](#post-apiv1smeaccounttest-fund-staging-only). | — |
+| 2026-07-02 | Same local-ledger test-fund added for the other apps: `POST /personal/accounts/test-fund` + `POST /corporate/accounts/test-fund` (staging only). | — |
