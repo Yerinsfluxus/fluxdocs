@@ -7,7 +7,9 @@
 **Last refreshed:** 2026-07-02 — SME test-fund rewired to credit the local ledger directly (no longer depends on the Anchor sandbox); same test-fund now exists for Personal + Corporate. See changelog immediately below. (2026-07-01: identity path expanded with device-header handling, refresh token endpoint, and a Personal-specific fine-grained step field.)
 
 > **What changed since 2026-07-02 (newest — read this first):**
-> 1. **`POST /sme/account/test-fund` now credits the local ledger directly — no Anchor call.** Behaviour for the FE is the same (call it, refresh, see the money), but it's now **immediate/synchronous** (no processing-window wait) and **works even when the Anchor sandbox is down/blocked**. `data.paymentReference` is now a local `SME-TEST-…` reference, not an Anchor payment id. The `Test funding failed: …` failure mode is gone. Production gate is `403`. See [§6](#post-apiv1smeaccounttest-fund-staging-only).
+> 1. **Transfers now charge a backend-owned fee.** Tiered: ≤₦5k → ₦10, ₦5k–₦50k → ₦25, >₦50k → ₦50. Balance must cover **amount + fee**; the `fee` is on the transaction summary + receipt. **Show it on the confirm screen and receipt from the response — don't compute it client-side.** See [§7 Transfer fee](#7-banks-name-enquiry-external-transfer).
+> 2. **Transaction list now includes `counterpartyBankName`.** `SmeTransactionSummary` gained a resolved bank name (not just `counterpartyBankCode`), matching the receipt. See [§6](#6-account-balance-transactions). Null when the code isn't in the bank list.
+> 3. **`POST /sme/account/test-fund` now credits the local ledger directly — no Anchor call.** Behaviour for the FE is the same (call it, refresh, see the money), but it's now **immediate/synchronous** (no processing-window wait) and **works even when the Anchor sandbox is down/blocked**. `data.paymentReference` is now a local `SME-TEST-…` reference, not an Anchor payment id. The `Test funding failed: …` failure mode is gone. Production gate is `403`. See [§6](#post-apiv1smeaccounttest-fund-staging-only).
 > 2. **Same test-fund now exists on the other apps:** `POST /api/v1/personal/accounts/test-fund` and `POST /api/v1/corporate/accounts/test-fund` — identical `{ "amount" }` body, same staging-only gate. Only relevant if you also build the Personal/Corporate money-landed screens.
 >
 > **What changed since 2026-06-02 (read this section if you've been building against the old doc):**
@@ -792,6 +794,7 @@ Latest first. `limit` clamped to 1–200.
   "counterpartyName": "...",
   "counterpartyAccountNumber": "...",
   "counterpartyBankCode": "000013",
+  "counterpartyBankName": "GTBANK PLC",   // NEW (2026-07-02) — resolved from the bank list; null if code unknown
   "narration": "...",
   "createdAt": "...", "completedAt": "..." }
 ```
@@ -854,6 +857,18 @@ Initiate an outbound bank transfer.
 - Min: ₦100
 - Max single transfer: ₦5,000,000
 - Validation errors: `"Amount must be a positive number."`, `"Minimum transfer is ₦100.00."`, `"Maximum single transfer is ₦5,000,000.00."`
+
+**Transfer fee (2026-07-02) — backend-owned, do NOT compute client-side.** The server charges a tiered fee on top of the amount and deducts **amount + fee** from the balance:
+
+| Transfer amount | Fee |
+|---|---|
+| ≤ ₦5,000 | ₦10 |
+| ₦5,001 – ₦50,000 | ₦25 |
+| > ₦50,000 | ₦50 |
+
+- The user's available balance must cover **amount + fee** or the transfer is rejected with `Insufficient balance.`
+- The `fee` appears on the returned transaction summary and on the receipt (§6). Show it on the review/confirm screen and the receipt — read it from the response, don't hardcode.
+- The client does **not** send a fee; any fee field in a request body is ignored.
 
 **Narration (PAY-SYS-03):** sanitized on the server — HTML tags, script/style blocks, dangerous URL schemes (`javascript:`, `data:`), and event handlers are stripped before the value is stored or sent to Anchor. Max 300 chars after sanitization.
 
@@ -1006,6 +1021,7 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 - **Account is single-account-per-profile** (MVP). One business account.
 - **NGN only**, kobo conversion handled server-side. FE sends amounts in NGN (e.g., `1000.00`).
 - **Transfer amount range:** ₦100 – ₦5,000,000 per transaction. Server validates regardless of any DTO-level check.
+- **Transfer fee:** backend-owned, tiered ₦10 / ₦25 / ₦50 by amount band (see §7). Balance must cover amount + fee. Read `fee` off the response; never compute it client-side.
 - **PIN rules:** exactly 4 digits, not sequential, not repeated. Max 3 wrong attempts (user-level, 10-min window) → that transfer reference is locked for 1 hour → reset via `/transaction-pin/forgot`.
 - **Pending transfer TTL:** 10 minutes. Pending transfers older than this are auto-cancelled by a background sweeper (every 60s).
 - **Idempotency keys:** required for transfers; recommended UUIDs.
@@ -1077,3 +1093,5 @@ These are server-to-server events from Anchor — the FE doesn't call them. List
 | 2026-06-15 | `POST /sme/onboarding/owner-role` now takes a required `bvn` (11 digits) — added after Femi + Eugene updated the flow. Stored privately on the profile; consumed by Anchor at KYB approve time. Admin approve still accepts a `bvn` override for legacy profiles. | — |
 | 2026-07-02 | `POST /sme/account/test-fund` rewired to credit the local ledger directly instead of Anchor's simulate-transfer rail — now immediate, provider-independent, and works while the Anchor sandbox is down. `paymentReference` is now a local `SME-TEST-…` ref; the `Test funding failed` mode is gone; prod gate is `403`. See [§6](#post-apiv1smeaccounttest-fund-staging-only). | — |
 | 2026-07-02 | Same local-ledger test-fund added for the other apps: `POST /personal/accounts/test-fund` + `POST /corporate/accounts/test-fund` (staging only). | — |
+| 2026-07-02 | **Transfer fee** added — backend-owned tiered fee (≤₦5k→₦10, ₦5k–₦50k→₦25, >₦50k→₦50). Balance must cover amount + fee; `fee` surfaced on transaction summary + receipt. See [§7](#7-banks-name-enquiry-external-transfer). | — |
+| 2026-07-02 | `SmeTransactionSummary` gained `counterpartyBankName` (resolved from the bank list) so the transactions list shows the beneficiary bank name, not just the code. See [§6](#6-account-balance-transactions). | — |
