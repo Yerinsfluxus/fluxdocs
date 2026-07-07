@@ -4,6 +4,15 @@
 **Backend:** shipped to staging. Prod pending your build.
 **Full specs (background only):** `docs/per-product-credentials-plan.md`, `docs/switch-product-step-up-plan.md`.
 
+## Contents
+
+- [1. `POST /identity/login` — add `productType` to the body](#1-post-identitylogin--add-producttype-to-the-body)
+- [2. Login response — three new fields to handle](#2-login-response--three-new-fields-to-handle)
+- [3. `POST /identity/passcode/set` — add `productType`](#3-post-identitypasscodeset--add-producttype)
+- [4. NEW endpoints — per-product phone/email](#4-new-endpoints--per-product-phoneemail)
+- [5. Token scope note](#5-token-scope-note)
+- [**6. `POST /identity/switch-product` — step-up when moving between products** *(NEW — added most recently)*](#6-post-identityswitch-product--step-up-when-moving-between-products)
+
 ---
 
 ## What changed on the BE and why it matters for you
@@ -119,14 +128,23 @@ identities:
 
 Login by any of `alice@x.com`, `+A`, or `+B` finds Alice's identity via the dual-table lookup. The membership rows never disconnect — they always point at the same `identityId`.
 
-#### Signup flow is unchanged
+#### How a Personal user opens an SME account (separate apps)
 
-Signup still asks for **one** phone number per product signup. If the user signs up on Personal first with `+A`, and later signs up on SME with `+B`, the server tries to find an existing identity via any of the identifiers they provide:
-- If the SME signup uses the same email as Personal → server finds Alice's existing identity, attaches an SME membership, sets SME's phone to `+B`.
-- If the SME signup uses a different email AND `+B` isn't already on file anywhere → server creates a **new** identity. Alice ends up with two separate accounts and would need to reach out for a manual merge (rare).
-- If `+B` matches an existing identity's or membership's verified phone → server refuses the signup ("This phone number is already in use").
+The two apps are separate installs — Personal doesn't have SME code and vice versa, so there's no "Add SME" button inside Personal. The cross-product path goes through the **other app's signup flow**, and the server links the two under one identity by matching the email/phone.
 
-So: for a user who's already Alice-on-Personal and wants to add SME with a different phone, the safe path is **stay logged in on Personal → tap "Add SME" → the existing enrollment endpoint attaches SME to the same identity → user then goes to SME settings and changes the SME phone to `+B`.** This is the flow Femi described.
+For Alice (already has Personal, wants SME):
+
+1. Alice downloads the SME app and hits `/identity/signup` with her Personal email.
+2. Server finds her existing identity → response is `existingAccount: true`, `nextStep: "Login"`.
+3. SME app routes her to a login screen with the identifier pre-filled.
+4. She hits `/identity/login` with `productType: "Sme"` + email. She has no SME credential yet → server returns `credentialSetupRequired: true`, `nextStep: "ForgotPasscode"`. SME app routes to forgot-passcode.
+5. She goes through forgot → OTP → reset → she picks an SME password. That password is now on her SME membership hash.
+6. She logs into SME app normally.
+7. If she wants a different business phone from her Personal one, in SME settings she taps "Change business phone" → PATCH → OTP → verify. Server updates SME's `PhoneNumber` only; Personal's is untouched.
+
+Same flow in reverse if someone starts on SME and later opens Personal.
+
+If she uses a totally different email on the SME app (not the one she used on Personal), the server can't link them — she ends up with two separate identities and would need support to merge. Not our default path.
 
 **Update phone (dispatches OTP to the new number):**
 ```
