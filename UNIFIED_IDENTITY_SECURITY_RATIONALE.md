@@ -6,6 +6,22 @@
 
 ---
 
+## Contents
+
+1. [The two models, in plain terms](#1-the-two-models-in-plain-terms)
+2. [Why unified is the right call (industry standard)](#2-why-unified-is-the-right-call-and-the-industry-standard)
+3. [The architecture (what actually exists)](#3-the-architecture-what-actually-exists)
+4. [Objections answered](#4-objections-answered)
+    - [4.1 Different legal entities (person vs company)](#41-different-legal-entities-person-vs-company)
+    - [4.2 A shared identity, one leaked credential (blast radius)](#42-a-shared-identity-one-leaked-credential-blast-radius)
+5. [Security controls (defense in depth)](#5-security-controls-defense-in-depth)
+6. [Loopholes we found and closed](#6-loopholes-we-found-and-closed-be-proud-of-this--it-shows-rigor)
+7. [Honest trade-offs](#7-honest-trade-offs-and-why-theyre-acceptable)
+8. [Q&A — likely questions, with answers](#8-qa--likely-auditor--colleague-questions-with-answers)
+9. [Glossary](#9-glossary)
+
+---
+
 ## 1. The two models, in plain terms
 
 **Model A — Silos ("each product its own login"):** Personal, SME, and Corporate are three separate systems. The same human signs up three times, verifies their identity (KYC/BVN) three times, and has three unrelated logins. Each silo stores its own copy of the customer.
@@ -58,7 +74,34 @@ So a request to move SME money must be backed by a token that proves the **SME**
 
 ---
 
-## 4. The skeptic's core objection — answered directly
+## 4. Objections answered
+
+### 4.1 Different legal entities (person vs company)
+
+> *"The three products track different legal entities — Personal is an individual, SME/Corporate are companies. The business is legally separate from the individual. So why collect them under one identity?"*
+
+This is the sharpest objection, and the answer is a distinction professional banking systems make explicitly: **the Identity is the login of the human who OPERATES the account — not the account holder.** There are two separate layers:
+
+| Layer | Answers | Personal | SME / Corporate |
+|---|---|---|---|
+| **Identity** (authentication) | *Who is logging in?* | the individual | the human who operates the account (owner / director / authorised user) |
+| **Product / Profile** (account holder of record) | *Whose account & money?* | the individual | **the company** — separate KYB, separate profile, separate money, separate password |
+
+We do **NOT** merge the legal entities. The individual's personal account and the company's business account stay **separate account holders, separately verified (KYC vs KYB), with separate money, data, and passwords.** The only shared thing is the **front door** — authenticating the human who operates them.
+
+Three points that make this airtight:
+
+1. **Regulation *requires* a human behind every business account.** AML/KYC mandates identifying the **beneficial owner** and **controlling persons** of a company account. Our SME KYB **already collects the owner's BVN, date of birth, and personal address** (the owner-personal step). So a verified human always stands behind a business account — by law. Unifying that human's login reflects the compliance reality; it is not an invented link.
+
+2. **This is exactly how real business banking works.** You (a person) log into your business bank with **your own** credentials to operate your **company's** account. The bank KYC'd you *and* KYB'd the company — it did not declare you and the company one legal entity. A director of two companies logs in once and switches between the two companies' accounts. The login is the operator's; the accounts stay legally separate.
+
+3. **The account is not "owned" by one login.** A business account can have **multiple** human operators with roles (Owner / Admin / Maker / Checker / Viewer) — Corporate already runs maker-checker with several users on one organisation. That is only possible *because* we separate the operator (Identity) from the account (Profile / Organisation). Silos, which fuse "the login" with "the account," can't cleanly model "several people operate one company account."
+
+So we are **not** connecting three unrelated businesses under one umbrella. We give one human **one authenticated front door**, behind which sit **separate, isolated, legally-distinct accounts** (own KYC/KYB, money, and password) that this human is authorised to operate. The legal separation the team rightly cares about is fully preserved — it lives in the Product/Profile layer, not in the login.
+
+**One-liner to say in the room:** *"The identity is the login of the person operating the account, not the account holder. The company is still the customer — KYB'd and isolated on its own. We just don't force the same human to log in three times to reach the three accounts they legally operate. Regulation already requires us to know the human behind the business, so that identity always exists anyway."*
+
+### 4.2 A shared identity, one leaked credential (blast radius)
 
 > *"With separate logins, each product is secured independently. A shared identity means if one credential leaks, everything is exposed. Isn't that a bigger blast radius?"*
 
@@ -120,6 +163,15 @@ A full internal audit of the unified + legacy auth surface was run; findings wer
 ---
 
 ## 8. Q&A — likely auditor / colleague questions, with answers
+
+**Q: The three products track different legal entities — Personal is a person, SME/Corporate are companies. How does one identity make sense?**
+A: The identity is the *login of the human who operates the account*, not the account holder. The company remains the customer of record — separately KYB'd, with its own profile, money, and password. We authenticate the operator once; we don't merge the legal entities. It's the same as logging into your business bank with your own credentials to run your company's account.
+
+**Q: Is the individual even relevant to a business account?**
+A: Yes — legally required. AML/KYC obliges us to identify the beneficial owner and controlling persons of a company account; our SME KYB already captures the owner's BVN, DOB, and personal address. A verified human always stands behind a business account, so unifying that human's login is natural, not invented.
+
+**Q: Can one company account have several operators, and can one person operate several accounts?**
+A: Yes to both — that's the point of separating operator (Identity) from account (Profile/Organisation). Corporate already supports multiple users on one organisation with maker-checker roles; a person can also operate their Personal account and a company's account with one login, each still isolated.
 
 **Q: If it's one identity, doesn't one leaked password expose all products?**
 A: No. Each product has its own password; product endpoints require a token that proves *that* product's password. A Personal breach stays in Personal. Money movement additionally needs the per-product transaction PIN.
